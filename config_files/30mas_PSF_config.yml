@@ -1,0 +1,55 @@
+# Image properties
+# ----------------
+MAG_ZP: 28.08    # AB-magnitude zero point.
+PIXEL_SCALE: 0.03    # Image pixel scale. [arcsec]
+
+# Star identification
+# -------------------
+STAR_SIZE: 23    # Side length of star cutouts. [pix]
+
+NSIG_THRESHOLD: 10    # Factor above error-map value required for detection.
+N_PEAKS: 1000    # Maximum number of peaks to identify.
+
+RADII: [0.8,3,5.33,8,10.66]    # Radii within which to measure the enclosed energy. [pix]
+
+SHIFT_LIM: 2    # Maximum accepted shift from cutout centre. [pix]
+MAG_MIN: 25.0    # Faint magnitude limit.
+MAG_MAX: 15.0    # Bright magnitude limit.
+THRESHOLD_MIN: -0.5    # Minimum acceptable pixel value.
+
+RANGE: [1.01,1.4]    # Range in which to bin ratio of COG at maximum and middle value.
+WIDTH: 0.01    # Histogram bin width.
+THRESHOLD_MODE: [0.9,1.1]    # Stars must be within this range of the modal ratio.
+
+SIGMA_FIT: 2.8    # Upper and lower clipping limit when fitting linear relation.
+ITERATIONS_FIT: 2    # Number of sigma clipping iterations.
+
+# PSF generation
+# --------------
+PSF_SIZE: 101    # Side length of the PSF cutout. [pix]
+
+WINDOW: 23    # Side length of the window to use for centring. [pix]
+NORM_RADIUS: 8    # Radius within which to normalise the PSF for stacking. [pix]
+
+STACK_SIGMA: 3    # Upper and lower clipping limit when stacking cutouts.
+MAX_ITERS: 2    # Number of sigma clipping iterations.
+DILATE_RADIUS: 3    # Clipping mask dilation radius. [pix]
+
+SNR_LIM: 1000    # Required signal-noise within the normalisation radius.
+DSHIFT_LIM: 3    # Maximum accepted difference in shift between central window and whole cutout. [pix]
+MASK_FRAC_LIM: 0.75    # Maximum accepted masked fraction within the normalisation radius.
+PHOT_FRAC_LIM: 0.5   # Minimum ratio of flux preserved within the normalisation radius after masking.
+
+# Kernel generation
+# -----------------
+OVERSAMPLE: 1    # Degree of PSF oversampling before kernel generation.
+ANGLE_SOURCE: 0.0    # Rotation to apply to source PSF. [deg]
+ANGLE_TARGET: 0.0    # Roatation to apply to target PSF. [deg]
+R_PARAMETER: 1e-4    # Regularisation parameter to use with pypher.
+
+# Convolution
+#------------
+N_TILES: 4    # Number of tiles to divide the image into for background estimation. 
+              # Set <= 1 to disable tiling.
+N_WORKERS: 4   # The number of workers to use when convolving images. 
+                # Only available when N_TILES > 1.

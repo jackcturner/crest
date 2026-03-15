@@ -1,0 +1,56 @@
+path.simplify : True
+
+# Figure
+
+figure.subplot.hspace: 0.03
+savefig.dpi : 300
+
+# Lines
+
+lines.linewidth   : 1.5
+
+# Axes
+
+axes.linewidth      : 0.5     # edge linewidth
+axes.xmargin        : 0.05  # x margin.
+axes.ymargin        : 0.05  # y margin.
+
+axes.grid           : True   # display grid or not
+grid.alpha	: 0.05
+grid.color	: grey 
+grid.linestyle : -
+grid.linewidth : 0.5
+
+legend.frameon: True
+legend.framealpha: 1
+legend.facecolor: white
+legend.fancybox: False
+legend.edgecolor: grey
+
+# Ticks
+
+xtick.top            : True   # draw ticks on the top side
+xtick.bottom         : True   # draw ticks on the bottom side
+xtick.major.size     : 3      # major tick size in points
+xtick.minor.size     : 1.5      # minor tick size in points
+xtick.major.width    : 0.25    # major tick width in points
+xtick.minor.width    : 0.25    # minor tick width in points
+xtick.direction      : in    # direction: in, out, or inout
+xtick.minor.visible  : True  # visibility of minor ticks on x-axis
+xtick.labelsize : 9
+
+ytick.left           : True   # draw ticks on the left side
+ytick.right          : True  # draw ticks on the right side
+ytick.major.size     : 3      # major tick size in points
+ytick.minor.size     : 1.5      # minor tick size in points
+ytick.major.width    : 0.25    # major tick width in points
+ytick.minor.width    : 0.25    # minor tick width in points
+ytick.direction      : in    # direction: in, out, or inout
+ytick.minor.visible  : True  # visibility of minor ticks on y-axis
+ytick.labelsize : 9
+
+# Text:
+text.usetex : True
+font.family : serif
+text.latex.preamble : \usepackage{newtxtext,newtxmath}
+font.size : 10

@@ -1,0 +1,31 @@
+# Ring-median filtering
+# ---------------------
+RING_CLIP_BOX_SIZE: 75    # Initial background estimate box size. [pix]
+RING_CLIP_FILTER_SIZE: 3    # Initial background estimate filter size. [box]
+
+RING_CLIP_MAX_SIGMA: 5    # Pixels this factor above the background are masked before filtering.
+
+RING_RADIUS_IN: 60    # Inner radius in of the filtering ring. [pix]
+RING_WIDTH: 3    # Width of the filtering ring. [pix]
+
+# Source masking
+# --------------
+TIER_NSIGMA: [2, 2, 2, 2]    # Factor above background required for detection at each masking tier.
+SCALE_THRESH: 30    # Minimum median weight ratio required for scaling of detection threshold.
+SCALE_MAX: 2.5    # Multiplicative limit on the detection threshold scaling.
+TIER_NPIXELS: [11, 7, 4, 2]    # Minimum connected pixels required for detection at each masking tier.
+TIER_KERNEL_SIZE: [19, 11, 6, 3]    # Standard deviation of the smoothing kernel at each masking tier.
+TIER_DILATE_SIZE: [19, 15, 11, 7]    # Radius of source mask dilation at each masking tier. [pix]
+
+# Background Subtraction
+# ----------------------
+BG_BOX_SIZE: 6    # Final background estimate box size. [pix]
+BG_SIGMA: 3    # The upper and lower sigma clipping limit.
+BG_FILTER_SIZE: 5    # Final background estimate filter size. [box]
+BG_EXCLUDE_PERCENTILE: 90    # Exclude boxes from filter if more than this percentage is masked.
+INTERPOLATOR: 'zoom'    # The interpolator to use. (zoom, IDW)
+
+N_TILES: 4    # Number of tiles to divide the image into for background estimation. 
+              # Set <= 1 to disable tiling.
+N_WORKERS: 4   # The number of workers to use when convolving images. 
+                # Only available when N_TILES > 1.
