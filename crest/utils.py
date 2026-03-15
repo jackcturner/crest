@@ -10,11 +10,23 @@ from scipy.ndimage import median_filter
 from scipy.ndimage import binary_dilation
 
 def _parallel_execute(func, tasks, workers):
-    """Execute tasks in a process pool; on spawn-related RuntimeError fall back to a thread pool.
+    """
+    Execute tasks in a process pool.
 
-    This mirrors XGA's pragmatic approach of using threads for some image-processing tasks to
-    avoid spawn/pickling/import-time issues while keeping the process-based executor for
-    best throughput when available.
+    Arguments
+    ---------
+    func (callable)
+        Function to execute for each task. 
+        Should take a single task dictionary as an argument.
+    tasks (list of dict)
+        List of task dictionaries to process.
+    workers (int)
+        Number of worker processes to use.
+
+    Returns
+    -------
+    results (list)
+        List of results returned by func for each task.
     """
 
     def _run_task(t):
@@ -31,15 +43,38 @@ def _parallel_execute(func, tasks, workers):
 
 def _tile_worker(args):
     """
-    Unified worker for tile tasks.
+    Unified worker for processing imaging tiles. Mode will be determined 
+    by the presence of specific keys.
 
-    Expected task dicts:
-      - ring-median: {'block','filled_block','slices','ring_footprint'}
-      - dilation: {'block','slices','dilate_footprint'}
-      - convolution: {'block','slices','kernel'}
+    Arguments
+    ---------
+    args (dict)
+        Dictionary containing the following keys:
+        - block (np.ndarray): Tile cutout with extended halo.
+        - slices (tuple): Coordinates defining the tile and halo slices.
+                          (y0, y1, x0, x1, e0, e1, f0, f1)
+                
+        If running in ring-median mode:
+        - ring_footprint (np.ndarray): Array defining the filtering 
+                                       footprint.
+        - filled_block (np.ndarray): 2D array of the tile with halo after 
+                                     filling NaNs with zeros.
 
-    Returns (y0,y1,x0,x1, interior)
+        If running in dilation mode:
+        - dilate_footprint (np.ndarray): Array defining the dilation 
+                                         footprint.
+        
+        If running in convolution mode:
+        - kernel (np.ndarray): 2D array defining the convolution kernel.
+        - mask (np.ndarray/None): Boolean array indicating pixels to 
+                                  ignore during convolution.
+    
+    Returns    
+    -------
+    y0, y1, x0, x1, interior (tuple)
+        The processed tile and its position without the halo.
     """
+
     block = args['block']
     (y0, y1, x0, x1, e0, e1, f0, f1) = args['slices']
 
@@ -74,8 +109,20 @@ def _construct_tiles(shape, num_tiles, halo):
     """
     Generate tile slices given a desired total number of tiles.
 
-    This computes a near-square grid (n_tiles_y, n_tiles_x) and yields
-    the tuples (y0,y1,x0,x1,e0,e1,f0,f1) for each tile including halo.
+    Arguments
+    ---------
+    shape (tuple)
+        Shape of the image to be tiled (ny, nx).
+    num_tiles (int)
+        Desired total number of tiles.
+    halo (int)
+        Number of pixels to extend each tile in each direction.
+    
+    Returns
+    -------
+    slices (list of tuples)
+        List of tuples defining the tile (y0, y1, x0, x1) and halo 
+        extended slices (e0, e1, f0, f1).
     """
 
     # Compute a near-square grid.
@@ -130,12 +177,14 @@ class TempFileManager:
         path (str)
             File path of the temporary file to be deleted later.
         """
+        
         self.temp_files.add(path)
 
     def cleanup(self):
         """
         Delete all registered temporary files.
         """
+
         for file in self.temp_files:
             if os.path.exists(file):
                 try:
@@ -147,22 +196,19 @@ class TempFileManager:
         """
         Remove files on signal.
         """        
+
         # Perform cleanup of temp files first.
         self.cleanup()
 
-        # For SIGINT, re-raise the default KeyboardInterrupt so that
-        # the interpreter stops as expected. For other signals (e.g.
-        # SIGTERM) exit cleanly.
+        # Re-raise the signal..
         try:
             if signum == signal.SIGINT:
                 signal.default_int_handler(signum, frame)
             else:
                 sys.exit(0)
         except KeyboardInterrupt:
-            # Allow KeyboardInterrupt to propagate.
             raise
 
-    
     def delete(self, path):
         """
         Delete a specific temporary file immediately and remove from registry.
