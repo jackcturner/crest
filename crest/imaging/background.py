@@ -8,12 +8,12 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+import matplotlib.pyplot as plt
 from astropy.io import fits
 from astropy import stats as astrostats
 from astropy.wcs import WCS
 from astropy.convolution import convolve_fft, Ring2DKernel, Gaussian2DKernel
 from scipy.ndimage import median_filter, binary_dilation, distance_transform_edt
-import matplotlib.pyplot as plt
 
 from photutils.background import Background2D, BiweightLocationBackground, BkgIDWInterpolator
 from photutils.background import BkgZoomInterpolator
@@ -30,7 +30,7 @@ class Background():
     weight regions and tiling to increase speed.
     """
 
-    def __init__(self, config_path):
+    def __init__(self, config_path, verbose=True):
         """
         __init__ method for Background class.
         
@@ -39,6 +39,8 @@ class Background():
         config_path (str)
             Path to .yml configuration file specifying parameters to use
             at each step.
+        verbose (bool)
+            If True, print progress messages.
         """
 
         p = Path(config_path)
@@ -46,8 +48,15 @@ class Background():
             cfg = yaml.safe_load(file)
         self.config = cfg
         self.config_filepath = str(p.resolve()) if not isinstance(config_path, dict) else None
+        self.verbose = verbose
 
-    
+    def _vprint(self, *args, **kwargs):
+        """
+        Print only when verbose output is enabled.
+        """
+        if self.verbose:
+            print(*args, **kwargs)
+
     def _replace_mask(self, sci, mask):
         """
         Replace masked regions of an image with a mean background 
@@ -103,30 +112,25 @@ class Background():
             mask = mask,
             interpolator = BkgZoomInterpolator())
         
-        # Cast photutils/astropy outputs to float32 to avoid upcasts.
-        bkg_background = bkg.background.astype(np.float32)
+        # Apply a floating ceiling based on the RMS.
+        background_rms = astrostats.biweight_scale((sci - bkg.background)[~mask]) 
 
-        # Apply a floating ceiling to the original image 
-        # based on the RMS.
-        background_rms = astrostats.biweight_scale((sci - bkg_background)[~mask]) 
-
-        ceiling = config["RING_CLIP_MAX_SIGMA"] * background_rms + bkg_background
+        ceiling = config["RING_CLIP_MAX_SIGMA"] * background_rms + bkg.background
         ceiling_mask = sci > ceiling
 
         sci_filled = self._replace_mask(sci, mask | ceiling_mask).astype(np.float32)
 
         # Filter with a ring kernel.
-        print(f"Ring median filtering with radius, width = ", end = '')
-        print(f'{config["RING_RADIUS_IN"]}, {config["RING_WIDTH"]}')
+        self._vprint(f'Ring median filtering with radius, width = '
+                     f'{config["RING_RADIUS_IN"]}, {config["RING_WIDTH"]}')
 
         ring = Ring2DKernel(config["RING_RADIUS_IN"], config["RING_WIDTH"])
-        footprint = ring.array
         halo = int(config['RING_RADIUS_IN'] + config['RING_WIDTH'])
 
         # If no tiling requested, filter the full image.       
         n_tiles = config.get('N_TILES', 1)
         if n_tiles <= 1:
-            filtered = median_filter(sci_filled, footprint=footprint)
+            filtered = median_filter(sci_filled, footprint=ring.array)
             rmf_image = (sci - filtered).astype(np.float32)
             return rmf_image
 
@@ -143,7 +147,7 @@ class Background():
             block = sci[e0:e1, f0:f1]
             filled_block = sci_filled[e0:e1, f0:f1]
             tasks.append({'block': block, 'filled_block': filled_block, 
-                          'slices': s, 'ring_footprint': footprint})
+                          'slices': s, 'ring_footprint': ring.array})
 
         # Execute in parallel and stitch tiles back together.
         workers = max(int(config.get('N_WORKERS', 1)), 1)
@@ -179,22 +183,21 @@ class Background():
             The updated 2D source mask.
         """
 
-        print(f"Tier #{tiernum}:")
-        print(f'  Kernel size = {config["TIER_KERNEL_SIZE"][tiernum]}')
-        print(f'  N-sigma = {config["TIER_NSIGMA"][tiernum]}')
-        print(f'  N-pixels = {config["TIER_NPIXELS"][tiernum]}')
-        print(f'  Dilate size = {config["TIER_DILATE_SIZE"][tiernum]}')
+        self._vprint(f"Tier #{tiernum}:")
+        self._vprint(f'  Kernel size = {config["TIER_KERNEL_SIZE"][tiernum]}')
+        self._vprint(f'  N-sigma = {config["TIER_NSIGMA"][tiernum]}')
+        self._vprint(f'  N-pixels = {config["TIER_NPIXELS"][tiernum]}')
+        self._vprint(f'  Dilate size = {config["TIER_DILATE_SIZE"][tiernum]}')
 
         # Calculate a robust RMS.
         background_rms = astrostats.biweight_scale(img[~mask])
 
-        # Replace the masked pixels by the robust background level so the
-        # convolution doesn't smear them.
+        # Replace the masked pixels by the robust background level/
         background_level = astrostats.biweight_location(img[~mask])
         replaced_img = np.where(mask, background_level, img).astype(np.float32)
 
-        print(f"  Median of ring-median-filtered image = {np.median(img[~mask])}")
-        print(f"  Biweight RMS of ring-median-filtered image  = {background_rms}")
+        self._vprint(f"  Median of ring-median-filtered image = {np.median(img[~mask])}")
+        self._vprint(f"  Biweight RMS of ring-median-filtered image  = {background_rms}")
 
         # Convolve the image with a Gaussian kernel.
         gauss_kernel = Gaussian2DKernel(config["TIER_KERNEL_SIZE"][tiernum])
@@ -205,13 +208,11 @@ class Background():
             convolved_difference = convolve_fft(
                 replaced_img, gauss_kernel, allow_huge=True).astype(np.float32)
 
-        # If no tiling requested, filter the full image.       
+        # Otherwise split into tiles.       
         else:
 
-            # Compute halo size.
             kh = int(max(gauss_kernel.array.shape) // 2)
 
-            # Split into tiles.
             ny, nx = img.shape
             convolved_difference = np.zeros_like(img, dtype=np.float32)
 
@@ -231,14 +232,13 @@ class Background():
                 y0, y1, x0, x1, interior = res
                 convolved_difference[y0:y1, x0:x1] = interior
 
-        # Now detect sources from the convolved image.
+        # Construct a source mask from detections in the convolved image.
         seg_detect = detect_sources(
             convolved_difference, 
-            threshold = config["TIER_NSIGMA"][tiernum] * background_rms * scaling, 
-            npixels = config["TIER_NPIXELS"][tiernum],
-            mask = mask)
+            threshold=config["TIER_NSIGMA"][tiernum] * background_rms * scaling, 
+            npixels=config["TIER_NPIXELS"][tiernum],
+            mask=mask)
         
-        # Mask the identifed sources.
         mask = seg_detect.make_source_mask()
 
         # If dilation requested.
@@ -251,7 +251,7 @@ class Background():
             footprint = circular_footprint(radius=dilate_r)
             n_tiles = config.get('N_TILES', 1)
 
-            # Dilate full mask if no tiling requested.
+            # Dilate the full mask if no tiling requested.
             if n_tiles <= 1:
                 mask = binary_dilation(mask, structure=footprint)
             
@@ -337,8 +337,6 @@ class Background():
                     exclude_percentile = config["BG_EXCLUDE_PERCENTILE"],
                     mask = mask,
                     interpolator = BkgZoomInterpolator())
-        # Ensure background array is float32 to avoid upcasts later.
-        bkg.background = bkg.background.astype(np.float32)
         return bkg
     
     def _estimate_background_IDW(self, img, mask, config):
@@ -368,12 +366,11 @@ class Background():
                     exclude_percentile = config["BG_EXCLUDE_PERCENTILE"],
                     mask = mask,
                     interpolator = BkgIDWInterpolator())
-        # Ensure background array is float32 to avoid upcasts later.
-        bkg.background = bkg.background.astype(np.float32)
         return bkg
 
     def _evaluate_bias(self, bkgd, detector_mask, mask):
-        """Evaluate the bias between masked and unmasked pixels.
+        """
+        Evaluate the bias between masked and unmasked pixels.
         
         Arguments
         ---------
@@ -383,6 +380,7 @@ class Background():
             A 2D image mask where True regions are off the detector.
         mask (numpy.ndarray)
             A 2D image mask where True regions are to be masked.
+
         Returns
         -------
         diff (float)
@@ -391,9 +389,6 @@ class Background():
         significance (float)
             The significance of the difference in mean values.
         """
-
-        # Ensure background array is float32.
-        bkgd = np.asarray(bkgd, dtype=np.float32)
 
         on_detector = np.logical_not(detector_mask)
     
@@ -410,34 +405,32 @@ class Background():
         # Calculate the significance of the difference in mean values.
         diff = mean_masked - mean_unmasked
         significance = diff / np.sqrt(stderr_masked**2 + stderr_unmasked**2)
-        
-        print(f"Mean under masked pixels   = {mean_masked:.4f} +- {stderr_masked:.4f}")
-        print(f"Mean under unmasked pixels = "
-              f"{mean_unmasked:.4f} +- {stderr_unmasked:.4f}")
-        print(f"Difference = {diff:.4f} at {significance:.2f} sigma significance")
+
+        self._vprint(f"Mean under masked pixels   = {mean_masked:.4f} +- {stderr_masked:.4f}")
+        self._vprint(f"Mean under unmasked pixels = "
+                 f"{mean_unmasked:.4f} +- {stderr_unmasked:.4f}")
+        self._vprint(f"Difference = {diff:.4f} at {significance:.2f} sigma significance")
 
         return diff, significance
 
-    def individual_background(self, science_paths, weight_paths, parameters={}, suffix='bkgsub',
-                              replace_sci=False, store_mask=True):
+    def individual_background(self, science_paths, weight_paths, parameters=None, suffix='bkgsub',
+                              store_mask=True):
         """
         Perform individual background subtraction with tiered source masking.
         
         Arguments
         ---------
-        science_paths (str, List[str])
+        science_paths (str/List[str])
             Filenames of science images to subtract the background
             from.
-        weight_paths (str, List[str])
+        weight_paths (str/List[str])
             Filenames of the corresponding weight images.
-        parameters (dict)
+        parameters (None/dict)
             Key-value pairs overwritting parameters given in the config
             file when instantiating the Background object.
         suffix (str)
             Suffix to append to the science filenames when saving 
             subtracted versions.
-        replace_sci (bool)
-            Whether to overwrite the science image or create a new file.
         store_mask (bool)
             Whether to store the tiered source mask as an extension.
             Required for merged masking.
@@ -448,13 +441,15 @@ class Background():
             Filenames of the generated background subtracted images.
         """
 
-        # If individual images are given convert to lists.
+        # Process the inputs.
+        if parameters is None:
+            parameters = {}
+
         if type(science_paths) == str:
             science_paths = [science_paths]
         if type(weight_paths) == str:
             weight_paths = [weight_paths]
 
-        # Raise an error if the lists are not of the same length.
         if len(science_paths) != len(weight_paths):
             raise KeyError('There should be corresponding images of each type.')
         
@@ -467,58 +462,50 @@ class Background():
                     warnings.warn(f'{key} is not a valid parameter. Continuing without updating.',
                                   stacklevel=2)
                     
-        # Store the filenames of the background subtracted images for
-        # later.
+        # Load each pair of images.
         bkgsub_filenames = []
         for sci_filename, weight_filename in zip(science_paths, weight_paths):
 
-            print(f'Measuring background of {sci_filename}...')
+            self._vprint(f'Measuring background of {sci_filename}...')
 
-            # Load in the images and header.
             sci, hdr = fits.getdata(sci_filename, header = True)   
             sci = np.asarray(sci, dtype=np.float32)
             wht = np.asarray(fits.getdata(weight_filename), dtype=np.float32)
 
             # Set up a bitmask
-            bitmask = np.zeros(sci.shape,np.uint32) # Enough for 32 tiers
+            bitmask = np.zeros(sci.shape,np.uint32)
 
-            # First level is for masking pixels off the detector
+            # First level is for masking pixels off the detector.
             off_detector_mask = (~np.isfinite(wht)) | (wht <= 0) | np.isnan(sci) | np.isnan(wht)
             mask = off_detector_mask.copy()
             bitmask = np.bitwise_or(bitmask, np.left_shift(off_detector_mask.astype(np.uint32), 0))
 
             # Scale the detection threshold for low weight regions.
-
-            # First calculate the median weight.
-            med_wht = np.median(wht[~off_detector_mask])
-
-            # Find the ratio of weight to median weight.
-            ratio = np.where(off_detector_mask, np.nan, med_wht / wht)
-
-            # Default scaling is 1 (NaNs preserved).
             scaling = np.ones(sci.shape, dtype=np.float32)
 
-            # If scaling requested.
+            # Find the ratio of weight to median weight.
+            med_wht = np.median(wht[~off_detector_mask])
+            ratio = np.where(off_detector_mask, np.nan, med_wht / wht)
+
+            # Turn on scaling above the provided threshold.
             if config['SCALE_THRESH'] != 'None':
 
-                # Turn on scaling above the provided threshold.
                 above_thresh = (ratio > config['SCALE_THRESH'])
                 if np.sum(above_thresh) > 0:
                     
-                    print("Scaling threshold based on weight ratios.")
+                    self._vprint("Scaling threshold based on weight ratios.")
 
                     # Limit scaling to the 99th percentile of these ratios.
                     percentile = np.percentile(ratio[above_thresh], 99)
                     ratio_capped = np.minimum(ratio[above_thresh], percentile)
 
-                    # Calculate the scaling.                                                                                                                                                                                                    
                     scaling[above_thresh] = (1 + (ratio_capped - 1) * (config['SCALE_MAX'] - 1) / 
                                             (percentile - 1))
 
             # Ring-median filter the image.
             filtered = self._clipped_ring_median_filter(sci, mask, config)
             
-            # Mask sources iteratively in tiers
+            # Mask sources iteratively in tiers.
             bitmask = self._mask_sources(filtered, bitmask, scaling, config, starting_bit = 1)
             source_mask = (bitmask != 0) 
 
@@ -527,45 +514,38 @@ class Background():
                 bkg = self._estimate_background_IDW(sci, source_mask, config)
             else:
                 bkg = self._estimate_background(sci, source_mask, config)
-            bkgd = np.asarray(bkg.background, dtype=np.float32)
 
-            # Subtract the background
-            bkgd_subtracted = (sci - bkgd).astype(np.float32)
+            # Subtract the background.
+            bkgd_subtracted = (sci - bkg.background).astype(np.float32)
             bkgd_subtracted = np.where(
                 off_detector_mask, np.float32(0.), bkgd_subtracted).astype(np.float32)
 
-            # Evaluate the bias under all sources.
-            print("Bias under bright sources:")
-            bias, sig = self._evaluate_bias(bkgd, off_detector_mask, source_mask)
+            # Evaluate the bias under all sources
+            self._vprint("Bias under bright sources:")
+            bias, sig = self._evaluate_bias(bkg.background, off_detector_mask, source_mask)
             hdr[f'BIAS_B'] = (bias, 'Bias under all sources.')
             hdr[f'SIG_B'] = (sig, 'Significance of bias under all sources.')
 
-            # And just under the faintest sources.
-            print("\nBias under fainter sources")
+            # and just under the faintest sources.
+            self._vprint("\nBias under fainter sources")
             faintmask = np.zeros(sci.shape, bool)
             for t in [len(config["TIER_NSIGMA"])-1, len(config["TIER_NSIGMA"])]:
                 faintmask = faintmask | (np.bitwise_and(bitmask, 2**t) != 0)
 
-            bias, sig = self._evaluate_bias(bkgd, off_detector_mask, faintmask)
+            bias, sig = self._evaluate_bias(bkg.background, off_detector_mask, faintmask)
             hdr[f'BIAS_F'] = (bias, 'Bias under faint sources.')
             hdr[f'SIG_F'] = (sig, 'Significance of bias under faint sources.')
 
-            # Overwrite or create new file.
-            if replace_sci == True:
-                out_filename = sci_filename
-            else:
-                out_filename = sci_filename.replace(".fits", f"_{suffix}.fits")
-
             # Save the file and append tier mask if needed.
-            print(f'Saving background subtracted image to {out_filename}...')
+            out_filename = sci_filename.replace(".fits", f"_{suffix}.fits")
+            self._vprint(f'Saving background subtracted image to {out_filename}...')
 
             # Add parameters and function used to header.
             hdr['HIERARCH MASK_TYPE'] = 'Individual'
             for (key, value) in config.items():
                 hdr[f'HIERARCH {key}'] = str(value)
 
-            # Write primary HDU and mask in a single write to avoid a second
-            # fits open/writeto cycle which is slow.
+            # Write primary HDU and mask.
             primary_hdu = fits.PrimaryHDU(bkgd_subtracted.astype(np.float32), header=hdr)
             if store_mask:
                 wcs = WCS(hdr)
@@ -581,7 +561,7 @@ class Background():
 
         return bkgsub_filenames
 
-    def merged_background(self, science_paths, bkgsub_images, parameters={}, WCS_filter=0,
+    def merged_background(self, science_paths, bkgsub_images, parameters=None, WCS_filter=0,
                           suffix=None, merged_name=None):
         """
         Perform background subtraction using a mask merged from multiple 
@@ -595,7 +575,7 @@ class Background():
         bkgsub_images (List[str])
             Filenames of background subtracted images using individual 
             masks.
-        parameters (dict)
+        parameters (None/dict)
             Key-value pairs overwritting parameters given in the config 
             file.
         WCS_filter (int):
@@ -608,20 +588,22 @@ class Background():
             Filename for the output merged source mask.
             If None, don't save.
         """
-            
-        print('Calculating background using merged mask:')
 
-        # Check that more than one image has been provided.
+        self._vprint('Calculating background using merged mask:')
+
+        # Process the inputs.
+        if parameters is None:
+            parameters = {}
+            
         if len(science_paths) == 1:
             raise KeyError('Only one science image given so not possible to create a merged mask.')
-        # Check lists are the same length.
         if len(science_paths) != len(bkgsub_images):
             raise KeyError('There should be corresponding images of each type.')
-        # Check WCS index is acceptable.
         if (WCS_filter >= len(science_paths)) or (WCS_filter < 0):
             raise ValueError(f'WCS_filter should index science images but has value {WCS_filter}'
                              f' for {len(science_paths)} images.')
 
+        # Overwrite some parameters just for this run.
         config = copy.deepcopy(self.config)
         for (key, value) in parameters.items():
                 if key in config:
@@ -631,7 +613,7 @@ class Background():
                                   stacklevel=2)
 
         mask = None
-        print('Generating mask...')
+        self._vprint('Generating mask...')
 
         # Iterate over each image and get the stored tiered mask.
         for i, bkgimage in enumerate(bkgsub_images):
@@ -642,7 +624,6 @@ class Background():
                 if i == WCS_filter:
                     wcs = WCS(hdu[0].header)
 
-                # Get the mask.
                 input_tiermask = hdu['TIERMASK'].data
                 this_source_mask = np.left_shift(np.right_shift(input_tiermask, 1), 1)
 
@@ -652,33 +633,32 @@ class Background():
                 else:
                     mask = mask | this_source_mask 
 
-        # The full merged mask (keep in memory; write to disk only if the
-        # user requested a filename).
         merged_mask = mask.astype(bool)
+
+        # Save the merged mask if requested.
         basedir = os.path.dirname(bkgsub_images[0])
         if merged_name is not None:
             if '.fits' not in merged_name:
                 merged_name = f'{merged_name}.fits'
             if os.path.dirname(merged_name) != basedir:
                 merged_name = f'{basedir}/{os.path.basename(merged_name)}'
-            hduout = fits.PrimaryHDU(merged_mask.astype(np.int32), header=wcs.to_header())
+            hduout = fits.PrimaryHDU(merged_mask.astype(np.uint32), header=wcs.to_header())
             hduout.writeto(merged_name, overwrite=True)
 
-        # Run final background subtraction on each image using merged mask
+        # Run final background subtraction using this merged mask
         for (image, bkgimage) in zip(science_paths, bkgsub_images):
-            print(f'Measuring final background for {bkgimage}...')
+            self._vprint(f'Measuring final background for {bkgimage}...')
 
             # Get tiermask from bgk-subtracted image to get bordermask
             # specific to this image.
             with fits.open(bkgimage) as hdumask:
                 bordermask = hdumask['TIERMASK'].data == 1 
 
-            # Combine the merged (in-memory) and border mask.
+            # Combine the merged and border masks.
             sourcemask = merged_mask | bordermask
             mask = sourcemask != 0
 
-            # Open the science image and measure the background using the
-            # merged mask.
+            # Measure the background.
             sci, hdr = fits.getdata(image, header = True)
             sci = np.asarray(sci, dtype=np.float32)
             wcs = WCS(hdr)
@@ -687,36 +667,29 @@ class Background():
                 bkg = self._estimate_background_IDW(sci, mask, config)
             else:
                 bkg = self._estimate_background(sci, mask, config)
-            bkgsub = (sci - np.asarray(bkg.background, dtype=np.float32)).astype(np.float32)
-            bkgsub = np.where(bordermask, np.float32(0.), bkgsub).astype(np.float32)
 
-            # Overwrite the original background image.
-            print(f'Saving background subtracted image to {bkgimage}...')
+            bkgsub = (sci - bkg.background).astype(np.float32)
+            bkgsub = np.where(bordermask, np.float32(0.), bkgsub).astype(np.float32)
+            bkgsub = np.where(sci == 0, 0, bkgsub)
 
             # Add parameters and function used to header.
             hdr['HIERARCH MASK_TYPE'] = 'Merged'
             for (key, value) in config.items():
                 hdr[f'HIERARCH {key}'] = str(value)
 
-            bkgsub = np.where(sci == 0, 0, bkgsub)
+            # Save the new image.
+            self._vprint(f'Saving background subtracted image to {bkgimage}...')
 
-            # If no suffix given, overwrite the original background
-            # subtracted image.
             if suffix == None:
-                fits.writeto(bkgimage, bkgsub.astype(np.float32), header = hdr, overwrite = True)
-            # Otherwise create a new file.
+                fits.writeto(bkgimage, bkgsub.astype(np.float32), header=hdr, overwrite=True)
             else:
                 fits.writeto(image.replace(".fits", f"_{suffix}.fits"), bkgsub.astype(np.float32),
-                             header = hdr, overwrite = True) 
-
-        # If the merged mask was written to disk by this function, leave it
-        # (user requested it). No temp file cleanup needed because we no
-        # longer create a transient temp file by default.
+                             header=hdr, overwrite=True) 
 
         return        
 
-    def full_background(self, science_paths, weight_paths, parameters={}, suffix='bkgsub', 
-                        suffix_merged='mbkgsub', WCS_filter=0, merged_name=None):
+    def full_background(self, science_paths, weight_paths, parameters=None, suffix='bkgsub', 
+                        suffix_merged='merged', WCS_filter=0, merged_name=None):
         """
         Perform iterative source masking on individual images and 
         measure final background from a merged mask.
@@ -728,7 +701,7 @@ class Background():
             background.
         weight_paths (List[str])
             Filenames of the corresponding weight images.
-        parameters (dict)
+        parameters (None/dict)
             Key-value pairs overwritting parameters given in the config
             file.
         suffix (str)
@@ -740,13 +713,13 @@ class Background():
         WCS_filter (int)
             Index into science_paths. The merged mask will borrow 
             WCS information from this image.
-        merged_name (str, None)
+        merged_name (str/None)
             The filepath to save the merged mask to. If None, don't save.
         """
 
         # Measure the individual backgrounds.
         bkgsub_images = self.individual_background(science_paths, weight_paths, 
-                                                   parameters, suffix, False, True)
+                                                   parameters, suffix, True)
 
         # Measure the merged background.
         self.merged_background(science_paths, bkgsub_images, parameters, WCS_filter,
@@ -823,13 +796,12 @@ def block_validate(science_path, bkgsub_path, weight_path, mask_path=None, max_b
     # Block sizes
     N_vals = np.arange(1, int(max_block))
 
-    # Open the RMS image.
+    # Construct a detector mask.
     with fits.open(weight_path) as hdul:
         weight = np.asarray(hdul[0].data, dtype=np.float32)
-
-        # Define a mask.
         mask = (weight <= 0) | (~np.isfinite(weight)) | np.isnan(weight)
 
+        # also mask sources.
         if mask_path is not None:
             with fits.open(mask_path) as hdul:
                 mask |= (hdul[0].data > 0)
@@ -837,8 +809,9 @@ def block_validate(science_path, bkgsub_path, weight_path, mask_path=None, max_b
             with fits.open(bkgsub_path) as hdul:
                 mask |= (hdul[1].data > 0)
 
-        # And the ideal rms.
+        # Compute the ideal rms.
         ideal_rms = np.nanmean(1 / np.sqrt(weight[~mask]))
+    del weight
 
     # For the native image, compute the block sums and 
     # their standard deviation.
@@ -881,45 +854,53 @@ def block_validate(science_path, bkgsub_path, weight_path, mask_path=None, max_b
 
     return fig, ax
 
-def distance_validate(science_path, bkgsub_path, weight_path, mask_path=None, max_dist=50):
-    # Read weight image and construct detector mask
+def distance_validate(science_path, bkgsub_path, weight_path, max_dist=50):
+    """
+    Validate background subtraction by comparing the biweight mean of pixels
+    at different distances from the top-level source mask.
+    
+    Arguments
+    ---------
+    science_path (str)
+        Filename of the original science image.
+    bkgsub_path (str)
+        Filename of the background subtracted image.
+    weight_path (str)
+        Filename of the weight image corresponding to the science image.
+    max_dist (int)
+        The maximum distance from the mask in pixels to test.
+
+    Returns
+    -------
+    fig (matplotlib.figure.Figure)
+        The figure object containing the validation plot.
+    ax (matplotlib.axes.Axes)
+        The axes object containing the validation plot.
+    """
+
+    # Also mask sources.
+    with fits.open(bkgsub_path) as hdul_mask:
+        img_bkgsub = np.asarray(hdul[0].data, dtype=np.float32)
+        if len(hdul) < 2:
+            raise KeyError('TIERMASK extension not found in bkgsub image; cannot run distance_validate.')
+        tiermask = hdul_mask[1].data
+
     with fits.open(weight_path) as hdul:
         weight = np.asarray(hdul[0].data, dtype=np.float32)
+        combined_mask = (tiermask > 0) | (weight <= 0) | (~np.isfinite(weight)) | np.isnan(weight)
+    del weight
 
-        detector_mask = (weight <= 0) | (~np.isfinite(weight)) | np.isnan(weight)
-
-        # Get merged mask if provided, otherwise use tier mask from bkgsub
-        if mask_path is not None:
-            with fits.open(mask_path) as hdul_mask:
-                merged_mask = hdul_mask[0].data > 0
-        else:
-            with fits.open(bkgsub_path) as hdul_mask:
-                # TIERMASK is stored in extension 1 for individual bkgsub images
-                merged_mask = hdul_mask[1].data > 0
-
-    combined_mask = detector_mask | merged_mask
-
-    # Read science and background-subtracted images and the tier mask
     with fits.open(science_path) as hdul:
         img_orig = np.asarray(hdul[0].data, dtype=np.float32)
 
-    with fits.open(bkgsub_path) as hdul:
-        img_bkgsub = np.asarray(hdul[0].data, dtype=np.float32)
-        # Try to read the tier mask (required to find top-level mask==2)
-        if len(hdul) < 2:
-            raise KeyError('TIERMASK extension not found in bkgsub image; cannot run distance_validate.')
-        tiermask = hdul[1].data
+    # Distance to nearest top-level mask pixel.
+    distances = distance_transform_edt(~(tiermask == 2)).astype(np.float32)
 
-    # Top-level mask pixels (value == 2)
-    top_mask = (tiermask == 2)
-
-    # Distance to nearest top-level mask pixel (in pixels)
-    distances = distance_transform_edt(~top_mask).astype(np.float32)
-
-    dist_vals = np.arange(1, int(max_dist) + 1)
     orig_means = []
     bkg_means = []
+    dist_vals = np.arange(1, int(max_dist) + 1)
 
+    # Compute the biweight mean of pixels at each distance from the mask.
     for d in dist_vals:
         sel = (np.floor(distances) == d) & (~combined_mask)
         vals_orig = img_orig[sel]
@@ -940,10 +921,13 @@ def distance_validate(science_path, bkgsub_path, weight_path, mask_path=None, ma
 
     # Plot the results
     fig, ax = plt.subplots(1, 1)
+
     ax.plot(dist_vals, orig_means, marker='o', linestyle='-', label='Original')
     ax.plot(dist_vals, bkg_means, marker='o', linestyle='-', label='Subtracted')
+
     ax.set_xlabel('Distance from top-level source mask (pixels)')
     ax.set_ylabel('Biweight mean')
+    
     ax.legend()
 
     return fig, ax
