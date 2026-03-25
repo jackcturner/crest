@@ -6,7 +6,6 @@ package_style = Path(__file__).with_name("crest.mplstyle")
 if package_style.exists():
 	plt.style.use(package_style)
 
-
 def _latex_available():
 	candidates = ("pdflatex", "xelatex", "lualatex", "latex")
 	for cmd in candidates:

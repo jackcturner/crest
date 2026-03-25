@@ -10,7 +10,7 @@ from astropy.table import Table
 from scipy.spatial import cKDTree
 import scipy.ndimage as nd
 
-from crest.cataloging import SourceExtractor
+from crest.cataloguing import SourceExtractor
 from crest.imaging.masking import create_edge_mask
 from crest.utils import TempFileManager, poisson_confidence_interval, _parallel_execute
 
