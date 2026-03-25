@@ -1,16 +1,17 @@
 # Adapted from the aperpy code available at https://github.com/astrowhit/aperpy
-# See also Weaver+2023, Skelton+2014 and Whitaker+2019.
+# See also Skelton+2014,  Whitaker+2019 and Weaver+2023.
 
 import os
 import copy
 import yaml
 import subprocess
-import traceback
 import warnings
-from pathlib import Path
 
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
+from scipy.ndimage import zoom, binary_dilation
 
 from astropy.io import fits
 from astropy.table import Table, hstack
@@ -19,32 +20,24 @@ from astropy.stats import mad_std, sigma_clip
 from astropy.convolution import convolve_fft
 from astropy.modeling.fitting import LinearLSQFitter, FittingWithOutlierRemoval
 from astropy.modeling.models import Linear1D
-from astropy.visualization import ImageNormalize, LinearStretch, simple_norm
-from matplotlib.patches import Circle
+from astropy.visualization import ImageNormalize, LinearStretch
 
 from photutils.aperture import CircularAperture, aperture_photometry
 from photutils.centroids import centroid_com
 from photutils.detection import find_peaks
 from photutils.utils import circular_footprint
 
-import cv2
-from scipy.ndimage import zoom, binary_dilation
-
 from crest.utils import _parallel_execute, _tile_worker, _construct_tiles, TempFileManager
-
-warnings.resetwarnings()
-warnings.filterwarnings('ignore', category=UserWarning, append=True)
-np.errstate(invalid='ignore')
 
 class PSF():
     """
-    Measure emprical PSFs from a set of images using the Aperpy / 
+    Measure empirical PSFs from a set of images using the Aperpy /
     Skelton+2014 / Whitaker+2019 approach. Generate matching kernels
     with PyPHER and match images to a common PSF using tiles.
 
     """
 
-    def __init__(self, config_path):
+    def __init__(self, config_path, verbose=True):
         """
         __init__ method for PSF class.
         
@@ -53,22 +46,32 @@ class PSF():
         config_path (str)
             Path to .yml configuration file specifying parameters to use
             at each step.
+        verbose (bool)
+            If True, print progress messages.
         """
 
         # Load the config file.
-        p = Path(config_path)
-        with p.open('r') as file:
+        with open(config_path, 'r') as file:
             cfg = yaml.safe_load(file)
         self.config = cfg
-        self.config_filepath = str(p.resolve()) if not isinstance(config_path, dict) else None
+        self.config_filepath = config_path
+        self.verbose = verbose
         
-        # Initalise dictionaries for storing science filename, PSFs and
+        # Initalise dictionaries for storing science filenames, PSFs and
         # kernels.
         self.filenames = {}
         self.PSFs = {}
         self.Kernels = {}
 
         self._temp_manager = TempFileManager()
+
+    def _vprint(self, *args, **kwargs):
+        """
+        Print only when verbose output is enabled.
+        """
+
+        if self.verbose:
+            print(*args, **kwargs)
     
     def _measure_curve_of_growth(self, image, radii, position=None):
         """
@@ -81,7 +84,7 @@ class PSF():
             The 2D image from which to measure the COG.
         radii (List[float])
             The radii in pixels within which to measure the flux.
-        position (None, list[float]) 
+        position (None/list[float]) 
             The x,y position of the source centre. If None, measure from 
             moments.
 
@@ -175,7 +178,8 @@ class PSF():
 
                 # Plot.
                 axi.imshow(img, norm=norm, origin='lower', interpolation='nearest')
-                # Optionally draw a circle at image centre with given radius
+
+                # Draw a circle at image centre with given radius
                 norm_radius = kwargs.get('norm_radius', None)
                 cy = img.shape[0] // 2
                 cx = img.shape[1] // 2
@@ -219,7 +223,7 @@ class PSF():
 
         Returns
         -------
-        peaks[accept] (stropy.table.table.QTable)
+        peaks[accept] (astropy.table.table.QTable)
             Information associated with each of the acceptable measured
             peaks.
         cutouts[accept] (numpy.ndarray):
@@ -316,7 +320,7 @@ class PSF():
         peaks['id'] = 1
         peaks['id'][accept] = np.arange(1, len(peaks[accept]) + 1)
 
-        print(f' Selected {sum(accept)} candidate stars.')
+        self._vprint(f' Selected {sum(accept)} candidate stars.')
 
         # Produce diagnostic figures.
         if save_figs == True:
@@ -716,7 +720,7 @@ class PSF():
                   (star_catalogue['phot_frac_mask'][i_accept] > config["PHOT_FRAC_LIM"]) &
                   (star_catalogue['accept'][i_accept] == True))
         
-        print(f' Stacking {np.sum(robust)} robust candidates...')
+        self._vprint(f' Stacking {np.sum(robust)} robust candidates...')
         stack = np.mean(clipped_data[robust], axis=0)    
  
         i_accept = i_accept[robust]
@@ -735,10 +739,10 @@ class PSF():
 
         return star_catalogue, masked_cutouts, stack
     
-    def measure_PSF(self, science_paths, error_paths, bands=None, parameters={},
+    def measure_PSF(self, science_paths, error_paths, bands=None, parameters=None,
                     save_PSF=False, save_figs=False, outdir='./'):
         """
-        Run star idenfication and stacking methods to obtain average 
+        Run star identification and stacking methods to obtain average
         PSF(s). Add generated PSF(s) to internal storage for later use.
 
         Arguments
@@ -752,7 +756,7 @@ class PSF():
             The photometric filters that these images correspond to.
             If None, use zero based indexing.
         parameters (dict)
-            Key-value pairs overwritting parameters given in the config 
+            Key-value pairs overwriting parameters given in the config
             file.
         save_PSF (bool)
             Should the PSF be saved to a fits file?
@@ -761,6 +765,9 @@ class PSF():
         outdir (str)
             Directory in which to save figures.
         """
+
+        if parameters == None:
+            parameters = {}
 
         # If single image given, convert to list.
         if type(science_paths) == str:
@@ -778,14 +785,13 @@ class PSF():
         for (key, value) in parameters.items():
                 if key in config:
                     config[key] = value
-                    hdr[f'HIERARCH {key}'] = str(value)
                 else:
                     warnings.warn(f'{key} is not a valid parameter. Continuing without updating.', 
                                   stacklevel=2)         
 
         for science_path, error_path, band in zip(science_paths, error_paths, bands):
 
-            print(f'Measuring empirical PSF from {science_path}...')
+            self._vprint(f'Measuring empirical PSF from {science_path}...')
 
             # Get images and corresponding header.
             sci, hdr = fits.getdata(science_path, header=True)
@@ -816,6 +822,9 @@ class PSF():
             # Normalise the PSF and remove mask.
             psf_average = np.array(psf_average)/np.sum(np.array(psf_average))
 
+            for key, value in config.items():
+                hdr[f'HIERARCH {key}'] = str(value)
+
             if save_PSF == True:
                 outname = os.path.basename(science_path.replace(".fits", "_EPSF.fits"))
                 fits.writeto(f'{outdir}/{outname}', psf_average, header=hdr, overwrite=True)
@@ -837,7 +846,7 @@ class PSF():
             # Store the PSF and corresponding filenames in the internal storage.
             if band != None:
                 if band in self.PSFs.keys():
-                    raise Warning(f'Previously measured {band} PSF overwritten.')
+                    warnings.warn(f'Previously measured {band} PSF overwritten.', stacklevel=2)
                 self.PSFs[band] = psf_average
                 self.filenames[band] = [science_path, error_path]
 
@@ -898,9 +907,9 @@ class PSF():
         radii_pix (array-like)
             The radii in pixels at which the enclosed energy was
             measured.
-        flux_source (tuple)
+        flux_source (numpy.ndarray)
             Profile of the first PSF.
-        flux_target (tuple)
+        flux_target (numpy.ndarray)
             Profile of the second PSF.
         """
 
@@ -921,7 +930,7 @@ class PSF():
 
         return radii, flux_source, flux_target
     
-    def generate_kernel(self, target_band, bands=None, parameters={}, save_kernel=True,
+    def generate_kernel(self, target_band, bands=None, parameters=None, save_kernel=True,
                         save_figs=True, outdir='./'):
         """Create a kernel to match the measured PSF to a target PSF.
 
@@ -945,7 +954,10 @@ class PSF():
             outputs.
         """
 
-        print(f'Generating matching kernels for {target_band}.')
+        self._vprint(f'Generating matching kernels for {target_band}.')
+
+        if parameters == None:
+            parameters = {}
 
         # Overwrite some config parameters just for this run.
         config = copy.deepcopy(self.config)
@@ -965,7 +977,7 @@ class PSF():
         
         # Oversample if required.
         if config['OVERSAMPLE'] > 1:
-            print(f' Oversampling by {config["OVERSAMPLE"]}x...')
+            self._vprint(f' Oversampling by {config["OVERSAMPLE"]}x...')
             target = zoom(target, config['OVERSAMPLE'])
 
         # Renormalise and save for passing to PyPHER.
@@ -986,7 +998,7 @@ class PSF():
                 if (band == target_band) or (band not in bands):
                     continue
 
-                print(f' Working on {band}...')
+                self._vprint(f' Working on {band}...')
 
                 # Oversample if required.
                 if config['OVERSAMPLE'] > 1:
@@ -1013,9 +1025,11 @@ class PSF():
                 try:
                     res = subprocess.run(pypherCMD, check=True, capture_output=True, text=True, timeout=300)
                     if res.stderr:
-                        print(res.stderr)
-                except subprocess.CalledProcessError as e:
-                    print(f"Error running PyPHER: {e}")
+                        self._vprint(res.stderr)
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                    stderr = getattr(e, 'stderr', '')
+                    raise RuntimeError(
+                        f'PyPHER failed for {band} -> {target_band}. {stderr}'.strip()) from e
 
                 # Remove the temporary source file.
                 self._temp_manager.delete(source_name)
@@ -1117,14 +1131,15 @@ class PSF():
                     fig.savefig(f'{outdir}/{outname}')
                     plt.close()
 
-        except:
-            traceback.print_exc()
+        except Exception as e:
+            raise RuntimeError(
+                f'Failed to generate matching kernels for target band {target_band}.') from e
         finally:
             self._temp_manager.cleanup()
         
         return
     
-    def convolve_image(self, target_band, bands=None, parameters={}, outdir='./'):
+    def convolve_image(self, target_band, bands=None, parameters=None, outdir='./'):
         """
         Convolve images used to measure PSF with generated matching
         kernels.
@@ -1142,6 +1157,9 @@ class PSF():
         outdir (str)
             Directory in which to store convolved images.
         """
+
+        if parameters == None:
+            parameters = {}
 
         # Check that matching kernels have been generated.
         if target_band not in self.Kernels.keys():
@@ -1164,7 +1182,10 @@ class PSF():
         # For each band.
         for band, kernel in self.Kernels[target_band].items():
 
-            print(f'Matching {band} to {target_band}...')
+            if band not in bands:
+                continue
+
+            self._vprint(f'Matching {band} to {target_band}...')
 
             # Load in the science and error images.
             sci, sci_hdr = fits.getdata(self.filenames[band][0], header=True)
@@ -1237,6 +1258,6 @@ class PSF():
                 ".fits", f"_match{target_band}.fits")
             fits.writeto(f'{outdir}/{outname}', convolved_err.astype(np.float32), err_hdr, overwrite=True)
 
-            print(' Done.')
+            self._vprint(' Done.')
         
         return

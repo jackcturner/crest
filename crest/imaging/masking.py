@@ -8,7 +8,7 @@ from astropy.wcs import WCS
 import scipy.ndimage as nd
 from regions import Regions
 
-def regions_to_mask(image_path, region_path, outname=None):
+def regions_to_mask(image_path, region_path):
     """
     Convert a DS9 region file to an image mask.
     
@@ -18,13 +18,12 @@ def regions_to_mask(image_path, region_path, outname=None):
         Path to fits image to be masked.
     region_path (str)
         Path to DS9 ".reg" file containing the masking regions.
-    outname (None, str)
-        Output name for the generated mask.
-        If None, append "_ds9_mask" to image name.
-    """
 
-    if outname == None:
-        outname = image_path.replace(".fits", "_ds9_mask.fits")
+    Returns
+    -------
+    mask_hdu (astropy.io.fits.PrimaryHDU)
+        The generated mask as a fits HDU.
+    """
 
     # Extract the WCS information from the image being masked
     img, hdr = fits.getdata(image_path, header=True)
@@ -35,7 +34,6 @@ def regions_to_mask(image_path, region_path, outname=None):
     pixcoords = [scoord.to_pixel(wcs) for scoord in regions]
 
     # Build a combined mask by processing each region separately.
-    # If there are no regions, create an empty mask matching the image shape.
     combined_mask = np.zeros_like(img, dtype=bool)
     for region in pixcoords:
         try:
@@ -49,12 +47,11 @@ def regions_to_mask(image_path, region_path, outname=None):
                           stacklevel=2)            
             continue
 
-    fits.writeto(outname, combined_mask.astype(np.uint8), hdr, overwrite=True)
+    mask_hdu = fits.PrimaryHDU(combined_mask.astype(np.uint8), header=wcs.to_header())
 
-    return outname
+    return mask_hdu
 
-def create_edge_mask(image_paths, off_image=0, buffer_size=5, threshold=0.1, 
-                     n_pixels=50, outname=None):
+def create_edge_mask(image_paths, off_image=0, buffer_size=5, threshold=0.1, n_pixels=50):
     """
     Use binary hole filling and sobel filters to identify and mask
     image edges and merge multiple masks into a single combined mask.
@@ -72,18 +69,12 @@ def create_edge_mask(image_paths, off_image=0, buffer_size=5, threshold=0.1,
         Threshold for edge identification.
     n_pixels (int)
         Number of  pixels to use when dilating the edge mask.
-    outname (str)
-        Filename for the saved edge mask.
 
     Returns
     -------
-    combined_mask (numpy.ndarray)
-        2D array where True indicates an edge in one of the 
-        provided images.
+    mask_hdu (astropy.io.fits.PrimaryHDU)
+        The generated edge mask as a fits HDU.
     """
-
-    if outname == None:
-        outname = f'{os.path.dirname(image_paths[0])}/edge_mask.fits'
 
     # Convert string to list if required.
     if type(image_paths) == str:
@@ -137,13 +128,14 @@ def create_edge_mask(image_paths, off_image=0, buffer_size=5, threshold=0.1,
         combined_mask = masks[0]
 
     hdr = fits.getheader(image_paths[0])
-    fits.writeto(outname, combined_mask.astype(np.uint8), hdr, overwrite=True)
+    wcs = WCS(hdr)
+    mask_hdu = fits.PrimaryHDU(combined_mask.astype(np.uint8), header=wcs.to_header())
 
-    return outname
+    return mask_hdu
 
 def clean_regions(region_file):
     """
-    Remove regions with zero width from a region file. These can 
+    Remove regions with zero area from a region file. These can 
     otherwise cause problems when converting to a mask.
 
     Arguments
@@ -151,7 +143,6 @@ def clean_regions(region_file):
     region_file (str)
         Path to region file to clean.
     """
-
 
     # Remove any non-numeric characters.
     def clean_value(value):

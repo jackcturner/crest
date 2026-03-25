@@ -43,11 +43,10 @@ class Background():
             If True, print progress messages.
         """
 
-        p = Path(config_path)
-        with p.open('r') as file:
+        with open(config_path, 'r') as file:
             cfg = yaml.safe_load(file)
         self.config = cfg
-        self.config_filepath = str(p.resolve()) if not isinstance(config_path, dict) else None
+        self.config_filepath = config_path
         self.verbose = verbose
 
     def _vprint(self, *args, **kwargs):
@@ -59,7 +58,7 @@ class Background():
 
     def _replace_mask(self, sci, mask):
         """
-        Replace masked regions of an image with a mean background 
+        Replace masked regions of an image with a biweight background 
         estimate.
         
         Arguments
@@ -72,7 +71,7 @@ class Background():
         Returns
         -------
         sci_filled (numpy.ndarray)
-            The image with masked regions replaced by the mean 
+            The image with masked regions replaced by the biweight 
             background.
         """
 
@@ -427,7 +426,7 @@ class Background():
             Filenames of the corresponding weight images.
         parameters (None/dict)
             Key-value pairs overwritting parameters given in the config
-            file when instantiating the Background object.
+            file for this run.
         suffix (str)
             Suffix to append to the science filenames when saving 
             subtracted versions.
@@ -577,13 +576,13 @@ class Background():
             masks.
         parameters (None/dict)
             Key-value pairs overwritting parameters given in the config 
-            file.
+            file for this run.
         WCS_filter (int):
             Index into science_paths. Take the WCS information from this
             image.
         suffix (None, str)
-            Suffix to append to the science filenames when saving merged 
-            and subtracted versions.
+            Suffix to append to the science filenames when saving 
+            subtracted versions.
         merged_name (str, None):
             Filename for the output merged source mask.
             If None, don't save.
@@ -879,11 +878,11 @@ def distance_validate(science_path, bkgsub_path, weight_path, max_dist=50):
     """
 
     # Also mask sources.
-    with fits.open(bkgsub_path) as hdul_mask:
+    with fits.open(bkgsub_path) as hdul:
         img_bkgsub = np.asarray(hdul[0].data, dtype=np.float32)
         if len(hdul) < 2:
             raise KeyError('TIERMASK extension not found in bkgsub image; cannot run distance_validate.')
-        tiermask = hdul_mask[1].data
+        tiermask = hdul[1].data
 
     with fits.open(weight_path) as hdul:
         weight = np.asarray(hdul[0].data, dtype=np.float32)
@@ -927,7 +926,7 @@ def distance_validate(science_path, bkgsub_path, weight_path, max_dist=50):
 
     ax.set_xlabel('Distance from top-level source mask (pixels)')
     ax.set_ylabel('Biweight mean')
-    
+
     ax.legend()
 
     return fig, ax

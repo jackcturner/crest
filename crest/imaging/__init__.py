@@ -1,6 +1,7 @@
 from crest.imaging.background import Background, block_validate, distance_validate
 from crest.imaging.psf import PSF
 from crest.imaging.masking import create_edge_mask, regions_to_mask, clean_regions
+from crest.imaging.completeness import measure_completeness
 
 __all__ = ['Background', 'block_validate', 'distance_validate', 'PSF',
-           'create_edge_mask', 'regions_to_mask', 'clean_regions']
+           'create_edge_mask', 'regions_to_mask', 'clean_regions', 'measure_completeness']
