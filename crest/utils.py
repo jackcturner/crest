@@ -4,10 +4,14 @@ import sys
 import atexit
 
 import numpy as np
+import threading
 from multiprocessing.dummy import Pool
 from astropy.convolution import convolve_fft
 from scipy.ndimage import median_filter
 from scipy.ndimage import binary_dilation
+from photutils.aperture import CircularAperture, aperture_photometry
+from photutils.centroids import centroid_com
+import scipy.stats as st
 
 def _parallel_execute(func, tasks, workers):
     """
@@ -165,8 +169,14 @@ class TempFileManager:
 
         # Remove files on any kind of exit.
         atexit.register(self.cleanup)
-        signal.signal(signal.SIGTERM, self.cleanup_on_signal)
-        signal.signal(signal.SIGINT, self.cleanup_on_signal)
+
+        # Only register signal handlers when running in the main thread.
+        if threading.current_thread() is threading.main_thread():
+            try:
+                signal.signal(signal.SIGTERM, self.cleanup_on_signal)
+                signal.signal(signal.SIGINT, self.cleanup_on_signal)
+            except Exception:
+                pass
 
     def register(self, path):
         """
@@ -177,7 +187,7 @@ class TempFileManager:
         path (str)
             File path of the temporary file to be deleted later.
         """
-        
+
         self.temp_files.add(path)
 
     def cleanup(self):
@@ -189,6 +199,8 @@ class TempFileManager:
             if os.path.exists(file):
                 try:
                     os.remove(file)
+                except FileNotFoundError:
+                    pass
                 except Exception as e:
                     print(f'Warning: Failed to delete {file} ({e})')
 
@@ -200,7 +212,7 @@ class TempFileManager:
         # Perform cleanup of temp files first.
         self.cleanup()
 
-        # Re-raise the signal..
+        # Re-raise the signal.
         try:
             if signum == signal.SIGINT:
                 signal.default_int_handler(signum, frame)
@@ -222,7 +234,93 @@ class TempFileManager:
             try:
                 os.remove(path)
                 self.temp_files.discard(path)
+            except FileNotFoundError:
+                self.temp_files.discard(path)
             except Exception as e:
                 print(f'Warning: Failed to delete {path} ({e})')
         else:
             print(f'Warning: File {path} does not exist and cannot be deleted.')
+
+def measure_curve_of_growth(image, radii, position=None):
+    """
+    Measure the Curve Of Growth of an image based on provided radii.
+    
+    Arguments
+    ---------
+    image (numpy.ndarray)
+        The 2D image from which to measure the COG.
+    radii (List[float])
+        The radii in pixels at which to measure the enclosed flux.
+    position (None, list[float]) 
+        The x,y position of the source centre. If None, measure from 
+        moments.
+
+    Returns
+    -------
+    radii (List[float])
+        The radii at which the enclosed energy was measured.
+    cog (numpy.ndarray)
+        The value of the COG at each radius.
+    """
+
+    # Calculate the centroid of the source.
+    if type(position) == type(None):
+        position = centroid_com(image)
+
+    # Calculate cumulative aperture fluxes
+    apertures = [CircularAperture(position, r = r) for r in radii]
+
+    phot_table = aperture_photometry(image, apertures)
+    cog = np.array([phot_table['aperture_sum_'+str(i)][0] for i in range(len(radii))])
+
+    return radii, cog
+
+def poisson_confidence_interval(counts, p=0.68):
+    """ 
+    Return the upper and lower Poisson confidence limits on a count.
+    
+    Arguments
+    ---------
+    counts (numpy.ndarray)
+        1D array of counts.
+    p (float)
+        The confidence limit to return.
+        
+    Returns
+    -------
+    intervals (numpy.ndarray)
+        2D array of upper and lower confidence limits.
+    """
+    
+    lower = []
+    upper = []
+
+    for n in counts:
+    
+        if n>0:   
+            interval=(st.chi2.ppf((1.-p)/2.,2*n)/2.,st.chi2.ppf(p+(1.-p)/2.,2*(n+1))/2.)       
+        
+        else:
+            
+            #this bit works out the case for n=0
+            
+            ul=(1.-p)/2.
+            
+            prev=1.0
+            for a in np.arange(0.,5.0,0.001):
+            
+                cdf=st.poisson.cdf(n,a)
+            
+                if cdf<ul and prev>ul:
+                    i=a
+            
+                prev=cdf
+            
+            interval=(0.,i)
+        
+        lower.append(interval[0])
+        upper.append(interval[1])
+    
+    intervals = np.column_stack([lower, upper])
+    
+    return intervals
