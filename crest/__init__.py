@@ -2,8 +2,13 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import shutil
 
-style_file = Path(__file__).parent.parent / "crest.mplstyle"
-plt.style.use(style_file)
+package_style = Path(__file__).with_name("crest.mplstyle")
+repo_style = Path(__file__).parent.parent / "crest.mplstyle"
+
+if package_style.exists():
+	plt.style.use(package_style)
+elif repo_style.exists():
+	plt.style.use(repo_style)
 
 def _latex_available():
 	candidates = ("pdflatex", "xelatex", "lualatex", "latex")
