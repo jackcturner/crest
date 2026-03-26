@@ -1,0 +1,72 @@
+# Background
+#-----------
+
+BKG_SUB: False    # Should the measured background be subtracted from the science image?
+
+SOURCE_MASK: None   # Path to source mask to use when calculating the background.    
+
+BOX_SIZE: [100,100]    # The size of the background box along each axis. [pixels]
+FILTER_SIZE: [3,3]    # The size along each axis of the 2D median filter. [pixels]
+FILTER_THRESH: None    # The threshold value for median filtering. Use None to filter all boxes.
+EDGE_METHOD: pad    # How to edit the image when it is not covered by an interger number of boxes. (pad, crop)
+EXCLUDE_PERCENTILE: 90    # Exclude boxes with percentage of pixels above this threshold masked.
+
+SIGMA_CLIP: True    # Should sigma clipping be used when calculating the background?
+SIGMA: [3,3]    # The lower and upper sigma limit to use for clipping.
+MAX_ITERS: 10    # The number of sigma clipping iterations.
+
+BACK_ESTIMATOR: SExtractor    # The approach to background level estimation. (Mean, Median, Mode, MMM, SExtractor, BiweightLocation)
+RMS_ESTIMATOR: Std    # The approach to background RMS estimation. (Std, MADStd, BiweightScale)
+INTERPOLATOR: 'Zoom'    # The approach to box interpolation (Zoom, IDW)
+
+# Filtering
+#----------
+
+FILTER: Gaussian    # The type of detection filter to apply. (Gaussian, Tophat)
+FWHM: 3.0    # The FWHM of the detection filter.
+SIZE: 5    # The size of the detection filter in the x and y directions.
+
+# Detection
+#----------
+
+N_PIXELS: 6    # The minimum number of connected pixels required for detection.
+N_SIGMA: 1.5    # The threshold above the background RMS at each pixel required for detection.
+CONNECTIVITY: 8    # The number of surrounding pixels considered connected to each pixel. (4, 8)
+
+CONTRAST: 0.01    # The fraction of the total source flux required to be deblended.
+N_LEVELS: 32    # The number of multi-thresholding levels to use for deblending.
+MODE: exponential    # The spacing between thresholding levels. (exponential, linear, sinh)
+
+SEGMAP: None    # File name to use when saving the segmenetation map. Use None to not save.
+
+# Photometry
+#-----------
+
+KRON_PARAMS: [2.5, 1.5, 0]    # Scaling parameter of the unscaled Kron radius, minimum value for the unscaled Kron radius, minimum circular radius. [-, pixels, pixels]
+RADII: []    # Measure photometry in circular apertures with these radii. [pixels]
+                      # Request output using APER_{idx}_flux and APER_{idx}_fluxerr.
+APERMASK_METHOD: mask    # Approach to nearby source masking. (correct, mask, none)
+LOCALBKG_WIDTH: 0    # The width of the rectangular annulus used to compute a local background around each source. [pixels]
+CONVOLVED: False    # Should the detection filtered image be used to measure source properties?
+CONVERSION: 21.15    # Conversion from image values to desired flux unit.
+
+# Empirical Errors
+# ----------------
+EMPIRICAL: True    # Whether to perform the empirical estimation.
+
+MIN_RADIUS: 1    # Minimum noise aperture radius in pixels.
+MAX_RADIUS: 40    # Maximum noise aperture radius in pixels.
+N_RADII: 20    # The number of aperture radii to use.
+RADII_SPACING: linear  # The spacing to use when selecting radii between min and max. (linear, log)
+
+N_SMALL: 3000    # The number of apertures with radii below the median to place.
+N_LARGE: 500    # The number of apertures with radii above the median to place.
+MAX_ITERS: 50000    # Maximum attempts at finding a non overlapping aperture before exitting.
+
+WALKERS: 256    # Number of walkers to use in the MCMC.
+BURN_IN: 500   # Number of burn in iterations.
+N_ITERS: 10000    # Number of MCMC iterations.
+P_ERR: 0.05    # Percentage error on each point to use when fitting.
+INITIAL: [1,1]    # Inital parameter guesses. 
+
+SAVE_FIG: True    # Whether to save a plot of noise vs aperture size.
