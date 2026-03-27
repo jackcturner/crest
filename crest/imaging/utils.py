@@ -224,8 +224,8 @@ def create_stack(science_paths, weight_paths, weight_is_rms=False, hdr_index=0,)
     -------
     sci_hdu (astropy.io.fits.PrimaryHDU)
         The stacked science image as an astropy HDU object.
-    wht_hdu (astropy.io.fits.PrimaryHDU)
-        The stacked weight image as an astropy HDU object.
+    rms_hdu (astropy.io.fits.PrimaryHDU)
+        The stacked rms image as an astropy HDU object.
     """
 
     if len(science_paths) != len(weight_paths):
@@ -237,7 +237,7 @@ def create_stack(science_paths, weight_paths, weight_is_rms=False, hdr_index=0,)
     img, sci_hdr = fits.getdata(science_paths[hdr_index], header=True)
     wht_hdr = fits.getheader(weight_paths[hdr_index])
 
-    shape = img.data.shape
+    shape = img.shape
     stack_sci = np.zeros(shape)
     stack_wht = np.zeros(shape)
 
@@ -251,8 +251,9 @@ def create_stack(science_paths, weight_paths, weight_is_rms=False, hdr_index=0,)
         stack_wht += wht_
 
     stack_sci /= stack_wht
+    stack_wht = 1 / np.sqrt(stack_wht)
 
     sci_hdu = fits.PrimaryHDU(stack_sci.astype(np.float32), header=sci_hdr)
-    wht_hdu = fits.PrimaryHDU(stack_wht.astype(np.float32), header=wht_hdr)
+    rms_hdu = fits.PrimaryHDU(stack_wht.astype(np.float32), header=wht_hdr)
 
-    return sci_hdu, wht_hdu
+    return sci_hdu, rms_hdu
