@@ -34,10 +34,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 include-package-data = true
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["crest*"]
+packages = [
+  "crest",
+  "crest.cataloguing",
+  "crest.imaging",
+]
 
 [tool.setuptools.package-data]
 crest = [
