@@ -37,14 +37,14 @@ class SourceExtractor():
         Arguments
         ---------
         config_path (str)
-            Path to ".yml" configuration file.
+            Path to YAML configuration file.
         sexpath (str/None)
             Path to SE executable. If not provided, find on PATH.
         verbose (bool)
             If True, print progress messages.
         """
 
-        # Read the configuration file and split into SE and wrapper
+        # Read the configuration file and split into SE and CREST
         # specific parts.
         self.configfile = config_path
         with open(self.configfile, 'r') as file:
@@ -70,20 +70,21 @@ class SourceExtractor():
 
     def _resolve_sexpath(self, sexpath):
         """
-        Resolve the Source Extractor executable path.
+        Resolve the SE executable path.
 
         Arguments
         ---------
-        sexpath (str or None)
-            Explicit path or command name for Source Extractor.
+        sexpath (str/None)
+            Explicit path to the SE executable.
 
         Returns
         -------
         resolved_path (str)
-            Executable path to Source Extractor.
+            Executable path to SE.
         """
 
-        # If a path or command was explicitly passed, try to resolve it first.
+        # If a path or command was explicitly passed, try to 
+        # resolve it first.
         if sexpath:
             resolved = shutil.which(sexpath)
             if resolved is not None:
@@ -95,6 +96,8 @@ class SourceExtractor():
 
         # Fall back to common executable names on PATH.
         resolved = shutil.which('sex')
+        if resolved is None:
+            resolved = shutil.which('source-extractor')
         if resolved is not None:
             return resolved
 
@@ -107,7 +110,6 @@ class SourceExtractor():
         """
         Print only when verbose output is enabled.
         """
-
         if self.verbose:
             print(*args, **kwargs)
 
@@ -148,9 +150,14 @@ class SourceExtractor():
         p = subprocess.Popen([self.sexpath], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         out, err = p.communicate()
 
-        # Search for the version number.
-        stderr_text = err.decode(encoding='UTF-8')
-        version_match = re.search(r"[Vv]ersion\s+([0-9\.]+)", stderr_text)
+        stdout_text = out.decode(encoding='UTF-8', errors='ignore')
+        stderr_text = err.decode(encoding='UTF-8', errors='ignore')
+        combined_text = '\n'.join([stdout_text, stderr_text])
+
+        # Search for version token first, then a numeric fallback.
+        version_match = re.search(r"[Vv]ersion\s+([0-9]+(?:\.[0-9]+)*)", combined_text)
+        if version_match is None:
+            version_match = re.search(r"\b([0-9]+(?:\.[0-9]+){1,})\b", combined_text)
 
         if version_match is None:
             raise RuntimeError('Could not determine Source Extractor version. Check the output of'
@@ -186,7 +193,7 @@ class SourceExtractor():
         
     def _convert_to_hdf5(self, catalogue, config):
         """
-        Converts a SE ascii catalogue to HDF5.
+        Convert a SE ascii catalogue to HDF5.
 
         Arguments
         ---------
@@ -230,7 +237,7 @@ class SourceExtractor():
     
     def _run_SExtractor(self, basecmd, SEconfig):
         """
-        Passes a command to SExtractor on the command line.
+        Passes a command to SE on the command line.
 
         Arguments
         ---------
@@ -256,7 +263,7 @@ class SourceExtractor():
         if res.stderr:
             for line in res.stderr.decode(encoding="UTF-8", errors='ignore').splitlines():
                 clean_line = ansi_escape.sub('', line)
-                self._vprint(clean_line, end='\n', flush=True)
+                print(clean_line, end='\n', flush=True)
         if res.returncode != 0:
             raise RuntimeError('Source Extractor encountered an error. Check the '
                                'output for further information.')
@@ -265,7 +272,7 @@ class SourceExtractor():
     
     def _update_config(self, parameters):
         """
-        Copy and update the stored SE and wrapper config dictionaries 
+        Copy and update the stored SE and CREST config dictionaries 
         with parameters provided at runtime.
 
         Arguments
@@ -278,7 +285,7 @@ class SourceExtractor():
         new_SEconfig (dict)
             An updated Source Extractor config.
         new_config (dict)
-            An updated wrapper config.
+            An updated CREST config.
         att_config (dict)
             Config with values appropriate for saving to hdf5.
         """
@@ -382,7 +389,6 @@ class SourceExtractor():
         limits = depth(sci, mask)
         self._vprint(f' Placed {depth.napers_used[0]} apertures.')
 
-        # Get the location of the apertures.
         locations = depth.apertures[0].positions
 
         # Construct the detection image.
@@ -390,29 +396,28 @@ class SourceExtractor():
         for i in np.round(locations).astype(int):
             det[i[1], i[0]] = 1
 
-        # Save the file.
         self._temp_manager.register(outname)
         fits.writeto(outname, det.astype(np.uint8), header=hdr, overwrite=True)
 
         return outname
 
-    def measure_depth(self, science, psf, mask=None, weight=None, parameters=None, radius=3.33, 
-                      max_apers=50, max_iters=50000, outdir='./'):
+    def measure_depth(self, science_path, psf_path, mask_path=None, weight_path=None, 
+                      parameters=None, radius=3.33, max_apers=50, max_iters=50000, outdir='./'):
         """
         Use randomly placed apertures to measure the average total
         5-sigma depth of an image.
         
         Arguments
         ---------
-        science (str)
+        science_path (str)
             Filename of science fits image.
-        psf (str)
+        psf_path (str)
             Filename of the PSF fits image used to scale the aperture 
             depths to total.
-        mask (None, str)
+        mask_path (None/str)
             Filename of the fits image mask. If None, generate and use
             a SE segmentation map.
-        weight (None, str)
+        weight_path (None/str)
             Filename of fits weight map. If None, no weighting will be 
             used if generating a mask and only NaN non-source pixels will
             be masked.
@@ -436,44 +441,39 @@ class SourceExtractor():
 
         if parameters is None:
             parameters = {}
+        if os.path.isdir(outdir):
+            self._outdir = outdir
+        else:
+            raise NotADirectoryError(f'{outdir} is not a directory. Set "outdir" to an '
+                                     'existing directory.')  
 
         try:
 
-            self._vprint(f'Measuring 5-sigma depth of {os.path.basename(science)}.')
-        
-            # Handle temporary files.
-            if os.path.isdir(outdir):
-                self._outdir = outdir
-            else:
-                raise NotADirectoryError(f'{outdir} is not a directory. Set "outdir" to an '
-                                'existing directory.')            
-            
-            self._prefix = os.path.splitext(os.path.basename(science))[0]
-
-            # Generate default SE config file.
-            sexfile = self._generate_default()
+            self._vprint(f'Measuring 5-sigma depth of {os.path.basename(science_path)}.')
+            self._prefix = os.path.splitext(os.path.basename(science_path))[0]
 
             # Update the config files.
+            sexfile = self._generate_default()
             SEconfig_depth, config_depth, _ = self._update_config(parameters)
         
             # Open the science image.
-            sci, hdr = fits.getdata(science, header=True)
+            sci, hdr = fits.getdata(science_path, header=True)
                 
-            # Has a source mask been provided?
-            if isinstance(mask, str):
-                source_mask = fits.getdata(mask)
+            # Use provided source mask
+            if isinstance(mask_path, str):
+                source_mask = fits.getdata(mask_path)
 
-            # If not, run SE and use the segmentation map as a mask.
+            # or run SE to generate one.
             else:
                 self._vprint('No source mask provided, will use generated segmentation map.')
                 SEconfig_depth['CATALOG_NAME'] = f'{self._outdir}/{self._prefix}depth_mask.temp.cat'
 
                 # Set up the command.
-                basecmd = [self.sexpath, "-c", sexfile, science]
+                basecmd = [self.sexpath, "-c", sexfile, science_path]
 
                 # Ensure weight map is provided correctly.
-                if isinstance(weight, str):
-                    basecmd += ['-WEIGHT_IMAGE', weight]
+                if isinstance(weight_path, str):
+                    basecmd += ['-WEIGHT_IMAGE', weight_path]
                     
                     # Are we dealing with relative weights or RMS?
                     if len(SEconfig_depth['WEIGHT_TYPE'].split(',')) > 1:
@@ -486,13 +486,13 @@ class SourceExtractor():
 
                 # If no weights are not being used, ensure types are set 
                 # correctly.         
-                elif isinstance(weight, type(None)):
+                elif isinstance(weight_path, type(None)):
                     if (SEconfig_depth['WEIGHT_TYPE'].count('NONE') + 
                         SEconfig_depth['WEIGHT_TYPE'].count('BACKGROUND')) != 1:
                         raise ValueError('No weight image provided but WEIGHT_TYPE = '
                                          f'{SEconfig_depth["WEIGHT_TYPE"]}.')
 
-                # Run SE to the get the mask.
+                # Run SE to get the mask.
                 SEconfig_depth['CHECKIMAGE_TYPE'] = 'SEGMENTATION'
                 check_name = SEconfig_depth["CATALOG_NAME"].replace(".temp.cat", ".seg.temp.fits")
                 SEconfig_depth['CHECKIMAGE_NAME'] = check_name
@@ -503,10 +503,10 @@ class SourceExtractor():
                 source_mask = fits.getdata(check_name)
 
             # Full mask includes sources and off detector regions.
-            full_mask = (source_mask != 0) + np.isnan(sci) + (~np.isfinite(sci))
-            if isinstance(weight, str):
-                wht = fits.getdata(weight)
-                full_mask = full_mask + np.isnan(wht) + (~np.isfinite(wht)) + (wht <= 0)
+            full_mask = (source_mask != 0) + (~np.isfinite(sci))
+            if weight_path is not None:
+                wht = fits.getdata(weight_path)
+                full_mask += (~np.isfinite(wht)) + (wht <= 0)
 
             # Place random apertures and save as detection image.
             SEconfig_depth = self._get_aperture_config(SEconfig_depth) 
@@ -515,11 +515,12 @@ class SourceExtractor():
                                         overlap_maxiters=max_iters, outname=det_filename)
 
             # Run SE.
-            SEconfig_depth['CATALOG_NAME'] = f'{self._outdir}/{self._prefix}depth_apertures.temp.cat'
+            cat_name = f'{self._outdir}/{self._prefix}depth_apertures.temp.cat'
+            SEconfig_depth['CATALOG_NAME'] = cat_name
             SEconfig_depth['PHOT_APERTURES'] = str(round(radius*2, 2))
             SEconfig_depth['PARAMETERS_NAME'] = self._write_params(['FLUX_APER', 'NUMBER'])
 
-            detcmd = [self.sexpath, "-c", sexfile, det_filename, science]
+            detcmd = [self.sexpath, "-c", sexfile, det_filename, science_path]
             self._run_SExtractor(detcmd, SEconfig_depth)
 
             # Get the aperture fluxes.
@@ -531,7 +532,7 @@ class SourceExtractor():
             mad = median_abs_deviation(flux[s], nan_policy='omit', scale='normal')
 
             # Measure the PSF curve of growth and interpolate.
-            psf_ = fits.getdata(psf)
+            psf_ = fits.getdata(psf_path)
             radii = np.arange(0.1, psf_.shape[0], 1)
             radii, cog, = measure_curve_of_growth(psf_, radii=radii, position=None)
             f = lambda r: np.interp(r, radii, cog)
@@ -548,24 +549,27 @@ class SourceExtractor():
         finally:
             self._temp_manager.cleanup()
     
-    def _empirical_uncertainty(self, science, weight, weight_type, segmap, SEconfig, config):
+    def _empirical_uncertainty(self, science_path, weight_path, weight_type, segmap_path, 
+                               SEconfig, config):
         """
         Perform empirical uncertainty estimation by fitting the relation
         between aperture size and noise. Based on Finkelstein+23.
 
         Arguments
         ---------
-        science (str)
+        science_path (str)
             Filename of the science image.
-        weight (str)
+        weight_path (str)
             Filename of the corresponding weight map.
+        weight_type (str)
+            The type of the weight map, either MAP_WEIGHT, 
+            MAP_VAR or MAP_RMS.
+        segmap_path (str)
+            Path to the segmentation map generated by SE.
         SEconfig (dict)
             SE configuration parameters specific to this image.
         config (dict)
-            Wrapper parameters specific to this image.
-        segmap (None, str)
-            Path to the segmentation map generated by SE. If None, run
-            SE to generate.
+            CREST parameters specific to this image.
         """
 
         self._vprint('\nMeasuring empirical uncertainties...')
@@ -580,20 +584,24 @@ class SourceExtractor():
         sexfile = self._generate_default()
 
         # Open images and construct mask. 
-        sci, hdr = fits.getdata(science, header = True)
-        seg = fits.getdata(segmap)
+        sci, hdr = fits.getdata(science_path, header = True)
+        seg = fits.getdata(segmap_path)
 
         # Convert to RMS.
-        err = fits.getdata(weight)
+        err = fits.getdata(weight_path)
         if weight_type == 'MAP_WEIGHT':
             err = 1/np.sqrt(err)
         elif weight_type == 'MAP_VAR':
             err = np.sqrt(err)
+        elif weight_type == 'MAP_RMS':
+            pass
+        else:
+            raise ValueError(f'Invalid weight type {weight_type}, only'
+                             'MAP_WEIGHT, MAP_VAR, and MAP_RMS are supported.')
             
-        mask = (np.isnan(sci) + np.isnan(err) + (err <= 0) + 
-                (~np.isfinite(sci)) + (~np.isfinite(err)))
+        mask = (err <= 0) + (~np.isfinite(sci)) + (~np.isfinite(err))
         
-        # Get the aperture radii.
+        # Seperate the radii into small and large components.
         if err_config['RADII_SPACING'] == 'linear':
             radii = np.linspace(err_config['MIN_RADIUS'], err_config['MAX_RADIUS'], 
                                 err_config['N_RADII'])
@@ -601,11 +609,10 @@ class SourceExtractor():
             radii = np.logspace(np.log10(err_config['MIN_RADIUS']),
                                 np.log10(err_config['MAX_RADIUS']), err_config['N_RADII'])
 
-        # Seperate the radii into small and large components.
         smaller = radii < np.median(radii)
         larger = radii >= np.median(radii)
 
-        # For both runs.
+        # For each component.
         app_runs = {'small':smaller, 'large':larger}
         medians = []
         for run, s in app_runs.items():
@@ -625,12 +632,11 @@ class SourceExtractor():
             apertures = apertures[:-1]
             err_SEconfig['PHOT_APERTURES'] = apertures
 
-            # Write the output parameter file.
             parameter_filename = self._write_params([f'FLUX_APER({sum(s)})'])
             err_SEconfig['PARAMETERS_NAME'] = parameter_filename
 
             # Run SE.
-            basecmd = [self.sexpath, "-c", sexfile, app_filename, science]
+            basecmd = [self.sexpath, "-c", sexfile, app_filename, science_path]
             self._run_SExtractor(basecmd, err_SEconfig)
 
             # Calculate the MAD in each aperture.
@@ -640,7 +646,6 @@ class SourceExtractor():
                 medians.append(median_abs_deviation(app_cat[column][s], nan_policy='omit', 
                                                     scale='normal'))
 
-            # Remove the aperture images.
             self._temp_manager.delete(app_filename)
 
         # The noise model to fit. 
@@ -685,15 +690,15 @@ class SourceExtractor():
         samples = sampler.get_chain(flat=True)
         theta_max  = samples[np.argmax(sampler.get_log_prob(flat=True))]
 
-        # Read original catalogue produced by SE.
-        cat = ascii.read(SEconfig['CATALOG_NAME'])
-
         # Median error value of the whole map.
         median_err = np.median(err[~mask])
 
         # We now want the radii of apertures used for photometry.
-        radii = SEconfig.get('PHOT_APERTURES', '0')
+        radii = SEconfig['PHOT_APERTURES']
         radii = [float(i) for i in radii.split(',')]        
+
+        # Read original catalogue produced by SE.
+        cat = ascii.read(SEconfig['CATALOG_NAME'])
 
         # Expecting a few NaNs so quiet any warnings.
         with np.errstate(invalid='ignore'):
@@ -718,7 +723,6 @@ class SourceExtractor():
                     area = np.pi * np.power(radii[aper], 2)
                     cat[f'FLUXERR_APER_{aper}_EMPIRICAL'] = model(theta_max, area) * rel_e 
 
-            # Overwrite the old catalogue.
             cat.write(SEconfig['CATALOG_NAME'], format='ascii', overwrite=True)
 
         # Save a plot of noise vs aperture size.
@@ -741,35 +745,41 @@ class SourceExtractor():
         
         return
 
-    def extract(self, science, weight=None, parameters=None, output=None, cat_name=None, outdir='./'):
+    def extract(self, science_path, weight_path=None, parameters=None, output=None, 
+                cat_name=None, outdir='./'):
         """
         Run Source Extractor in any of its standard modes.
 
         Arguments
         ---------
-        science (str, List[str])
+        science_path (str/List[str])
             If str, the filename of the image to extract.
             If a List[str] filename of detection and measurement images.
-        weight (None, str, List[str])
+        weight_path (None/str/List[str])
             If None, ignore weighting.
-            If str, weight map of the science image.
-            If List[str], weight maps for detection and measurement.
-        parameters (dict)
+            If str, path to corresponding weight map.
+            If List[str], paths to weight maps for detection 
+            and measurement.
+        parameters (None/dict)
             Key-value pairs overwritting parameters in the config file 
             just for this run.
-        output (None, list)
+        output (None/list)
             List of output parameters to save. If None, return some key 
             values.
-        cat_name (None, str)
+        cat_name (None/str)
             The base name for the photometry catalogue. If None, use the 
             base name of the measurement file.
         outdir (str)
             Directory in which to store outputs. 
+
+        Returns
+        -------
+        outname (str)
+            The name of the output hdf5 photometry catalogue.
         """
 		
         try:
 
-            # Avoid mutable default for parameters
             if parameters is None:
                 parameters = {}
             
@@ -807,11 +817,11 @@ class SourceExtractor():
             output = set(output)            
 
             # Check for double mode.
-            if isinstance(science, list):
+            if isinstance(science_path, list):
                 self._vprint('Starting extraction in dual image mode.')
                 
                 # Get the file prefix and catalogue name.
-                self._prefix = os.path.splitext(os.path.basename(science[1]))[0]
+                self._prefix = os.path.splitext(os.path.basename(science_path[1]))[0]
                 if isinstance(cat_name, type(None)):
                     img_SEconfig['CATALOG_NAME'] = f'{outdir}/{self._prefix}_sextractor.temp.cat'
                 else:
@@ -820,11 +830,11 @@ class SourceExtractor():
                 
                 # Generate the base SE parameter file and command.
                 sexfile = self._generate_default() 
-                basecmd = [self.sexpath, "-c", sexfile, science[0], science[1]]  
+                basecmd = [self.sexpath, "-c", sexfile, science_path[0], science_path[1]]  
 
                 # Check if weights are being used.
-                if isinstance(weight, list):
-                    if len(weight) == 2:
+                if isinstance(weight_path, list):
+                    if len(weight_path) == 2:
 
                         # Are we dealing with relative weights or RMS?
                         split_weight = img_SEconfig['WEIGHT_TYPE'].split(',')
@@ -835,7 +845,7 @@ class SourceExtractor():
 
                         # How we set up the command depends on how many 
                         # weight paths were provided. 
-                        s = [i is None for i in weight]
+                        s = [i is None for i in weight_path]
 
                         # Two weight images.
                         if sum(s) == 0:
@@ -843,7 +853,7 @@ class SourceExtractor():
                                 ('BACKGROUND' in img_SEconfig["WEIGHT_TYPE"])):
                                 raise ValueError('Two weight maps provided but WEIGHT_TYPE = '
                                                  f'{img_SEconfig["WEIGHT_TYPE"]}.')
-                            basecmd += ['-WEIGHT_IMAGE', f'{weight[0]},{weight[1]}']
+                            basecmd += ['-WEIGHT_IMAGE', f'{weight_path[0]},{weight_path[1]}']
 
                         # One weight image.
                         elif sum(s) == 1:
@@ -862,8 +872,8 @@ class SourceExtractor():
                                 raise ValueError('No measurement weight provided but WEIGHT_TYPE = '
                                                  f'{img_SEconfig["WEIGHT_TYPE"]}.')
                             
-                            weight = [item if item is not None else '' for item in weight]
-                            basecmd += ['-WEIGHT_IMAGE', f'{weight[0]},{weight[1]}']
+                            weight_path = [item if item is not None else '' for item in weight_path]
+                            basecmd += ['-WEIGHT_IMAGE', f'{weight_path[0]},{weight_path[1]}']
                             
                         # If no weight images, we don't need to update 
                         # the command.
@@ -878,7 +888,7 @@ class SourceExtractor():
                                          'form [detection, measurement].')  
                     
                 # Also allow passing a single None.       
-                elif isinstance(weight, type(None)):
+                elif isinstance(weight_path, type(None)):
                     weight_type = 'NONE'
                     if (img_SEconfig['WEIGHT_TYPE'].count('NONE') + 
                         img_SEconfig['WEIGHT_TYPE'].count('BACKGROUND')) != 2:
@@ -889,11 +899,11 @@ class SourceExtractor():
                                      'form [detection, measurement].') 
 
             # If not double, hopefully we are in single image mode.
-            elif isinstance(science, str):
+            elif isinstance(science_path, str):
                 self._vprint('Starting extraction in single image mode.')
 
                 # Get the file prefix and catalogue name.
-                self._prefix = os.path.splitext(os.path.basename(science))[0]
+                self._prefix = os.path.splitext(os.path.basename(science_path))[0]
                 if isinstance(cat_name, type(None)):
                     img_SEconfig['CATALOG_NAME'] = f'{outdir}/{self._prefix}_sextractor.temp.cat'
                 else:
@@ -902,13 +912,13 @@ class SourceExtractor():
 
                 # Generate the base SE parameter file and command.
                 sexfile = self._generate_default() 
-                basecmd = [self.sexpath, "-c", sexfile, science]
+                basecmd = [self.sexpath, "-c", sexfile, science_path]
 
                 # Check if weights are being used.
-                if isinstance(weight, str):
+                if isinstance(weight_path, str):
 
                     # Update the base command.
-                    basecmd += ['-WEIGHT_IMAGE', weight]
+                    basecmd += ['-WEIGHT_IMAGE', weight_path]
                     
                     # Are we dealing with relative weights or RMS?
                     if len(img_SEconfig['WEIGHT_TYPE'].split(',')) > 1:
@@ -922,7 +932,7 @@ class SourceExtractor():
 
                 # If no weights are not being used, ensure types are set 
                 # correctly.         
-                elif isinstance(weight, type(None)):
+                elif isinstance(weight_path, type(None)):
                     weight_type = 'NONE'
                     if (img_SEconfig['WEIGHT_TYPE'].count('NONE') + 
                         img_SEconfig['WEIGHT_TYPE'].count('BACKGROUND')) != 1:
@@ -956,14 +966,14 @@ class SourceExtractor():
                 # And possibly a weight map.
                 if (weight_type == 'NONE') or (weight_type == 'BACKGROUND'):
                     if 'BACKGROUND_RMS' in check_images.keys():
-                        weight = check_images['BACKGROUND_RMS']
+                        weight_path = check_images['BACKGROUND_RMS']
                     else:
-                        weight = img_SEconfig["CATALOG_NAME"].replace(".temp.cat", ".rms.temp.fits")
-                        self._temp_manager.register(weight)
-                        check_images['BACKGROUND_RMS'] = weight
+                        weight_path = img_SEconfig["CATALOG_NAME"].replace(".temp.cat", ".rms.temp.fits")
+                        self._temp_manager.register(weight_path)
+                        check_images['BACKGROUND_RMS'] = weight_path
                     weight_type = 'MAP_RMS'
-                elif isinstance(weight, list):
-                    weight = weight[1]
+                elif isinstance(weight_path, list):
+                    weight_path = weight_path[1]
             
             # Add all the checkimage requests to the config.
             img_SEconfig['CHECKIMAGE_TYPE'] = ','.join(check_images.keys())
@@ -984,11 +994,11 @@ class SourceExtractor():
 
             # Begin uncertainty estimation.
             if img_config['EMPIRICAL'] == True:
-                if isinstance(science, list):
-                    self._empirical_uncertainty(science[1], weight, weight_type, segmap, 
+                if isinstance(science_path, list):
+                    self._empirical_uncertainty(science_path[1], weight_path, weight_type, segmap, 
                                                 img_SEconfig, img_config)
                 else:
-                    self._empirical_uncertainty(science, weight, weight_type, segmap, 
+                    self._empirical_uncertainty(science_path, weight_path, weight_type, segmap, 
                                                 img_SEconfig, img_config)                   
             
             # Combine the two config files and save everything to hdf5.

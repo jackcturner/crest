@@ -3,63 +3,69 @@ import subprocess
 from pathlib import Path
 import yaml
 
-
 class ProFound():
     """
     Wrapper around the ProFound.R ProFound class (via run_ProFound.R) 
     to allow running through Python.
     """
 
-    def __init__(self, config_file):
+    def __init__(self, config_file, verbose=True):
         """
         __init__ method for ProFound.
 
         Arguments
         ---------
         config_file (str)
-            Path to ".yml" configuration file.
+            Path to YAML configuration file.
+        verbose (bool)
+            If True, print progress messages.
         """
 
-        # Store the configuration file path
-        self.configfile = config_file
-
-        # and the content.
-        with open(self.configfile, 'r') as file:
-            yml = yaml.safe_load_all(file)
-            content = []
-            for entry in yml:
-                content.append(entry)
-            self.config = content[0]
-
-        # Resolve path to bundled CREST R wrappers from the installed package.
+        # Resolve path to R wrappers.
         self.crest_path = str(Path(__file__).resolve().parent)
 
         script_path = Path(self.crest_path) / 'run_profound.R'
         if not script_path.exists():
             raise FileNotFoundError(f'Cannot find run_profound.R at {script_path}')
 
-    def measure_depth(self, science, psf, mask=None, error=None, parameters=None, radius=3.33,
-                      max_apers=50, max_iters=50000):
+        # Store the configuration file path
+        self.configfile = config_file
+
+        # and the content.
+        with open(self.configfile, 'r') as file:
+            self.config = next(yaml.safe_load_all(file))
+
+        self.verbose = verbose
+
+    def _vprint(self, *args, **kwargs):
+        """
+        Print only when verbose output is enabled.
+        """
+
+        if self.verbose:
+            print(*args, **kwargs)
+
+    def measure_depth(self, science_path, psf_path, mask_path=None, error_path=None, 
+                      parameters=None, radius=3.33, max_apers=50, max_iters=50000):
         """
         Measure the 5-sigma point source depth of an image using 
         ProFound. This method simply passes the parameters to 
-        wrap_profound.R.
+        run_profound.R.
         
         Arguments
         ---------
-        science (str)
+        science_path (str)
             Filename of science fits image.
-        psf (str)
+        psf_path (str)
             Filename of the PSF fits image used to scale the aperture 
             depths to total.
-        mask (None, str)
-            Filename of the fits image mask. If None, generate and use
+        mask_path (None, str)
+            Path to the fits image mask. If None, generate and use
             a ProFound segmentation map.
-        error (None, str)
-            Filename of fits RMS map. If None, no weighting will be 
-            used if generating a mask and only NaN non-source pixels will
-            be masked.
-        parameters (dict)
+        error_path (None, str)
+            Path to the fits RMS map. 
+            If None, only infinite non-source pixels will be masked.
+        parameters (None, dict)
             Key-value pairs overwritting parameters in the config file 
             just for this run.
         radius (float)
@@ -81,49 +87,65 @@ class ProFound():
         # Contruct the base command for running ProFound in depth mode.
         script_path = os.path.join(self.crest_path, 'run_profound.R')
         basecmd = [f'Rscript', script_path, 'type=depth', f'config_path={self.configfile}',
-               f'img1={science}', f'psf={psf}',
-                   f'radius={radius}', f'max_apers={max_apers}', f'max_iters={max_iters}']
+                   f'img1={science_path}', f'psf={psf_path}', f'radius={radius}',
+                   f'max_apers={max_apers}', f'max_iters={max_iters}']
         
         # Add source mask.
-        if isinstance(mask, type(None)):
+        if isinstance(mask_path, type(None)):
             basecmd.append('mask=None')
         else:
-            basecmd.append(f'mask={mask}')
+            basecmd.append(f'mask={mask_path}')
         
         # Add error map.
-        if isinstance(error, type(None)):
+        if isinstance(error_path, type(None)):
             basecmd.append('error=None')
         else:
-            basecmd.append(f'error={error}')
+            basecmd.append(f'error={error_path}')
         
         # Add the overwritten parameters.
         for key, value in parameters.items():
             basecmd.append(f'{key}={value}')
 
-        # Now run on the command line.     
-        p = subprocess.Popen(basecmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                     text=True, cwd=self.crest_path)
-        for line in p.stderr:
-            print(line)
-        out, err = p.communicate()       
+        # Now run on the command line.
+        p = subprocess.Popen(basecmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out, err = p.communicate()
 
-        # Get the depth and return it.
-        if p.returncode == 0:
-            if 'Depth:' in out:
-                depth = out.split('Depth:')[1].strip()
-                return float(depth)
-        else:
-            raise RuntimeError('ProFound encountered an error. Check the '
-                               'output for further information.')
+        if err:
+            for line in err.splitlines():
+                print(line)
 
-    def extract(self, science, parameters=None, outputs=None, cat_name=None, outdir='./'):
+        if p.returncode != 0:
+            raise RuntimeError(
+                'ProFound encountered an error.\n'
+                f'Command: {" ".join(basecmd)}\n'
+                f'Stdout:\n{out}\n'
+                f'Stderr:\n{err}'
+            )
+
+        if 'Depth:' not in out:
+            raise RuntimeError(
+                'ProFound completed without returning a depth value.\n'
+                'Expected token "Depth:" was not found in stdout.\n'
+                f'Stdout:\n{out}\n'
+                f'Stderr:\n{err}'
+            )
+
+        depth = out.split('Depth:')[1].strip()
+        try:
+            return float(depth)
+        except ValueError as exc:
+            raise RuntimeError(
+                f'ProFound returned an unparsable depth value: {depth}'
+            ) from exc
+
+    def extract(self, science_path, parameters=None, outputs=None, cat_name=None, outdir='./'):
         """
         Perform source extraction and photometry using Profound. 
         This method simply passes the parameters to wrap_profound.R.
 
         Arguments
         ---------
-        science (str, List[str])
+        science_path (str, List[str])
             If str, the filename of the image to extract.
             If a List[str] filename of detection and measurement images.
         parameters (dict)
@@ -151,17 +173,17 @@ class ProFound():
         basecmd = [f'Rscript', script_path, 'type=extract', f'config_path={self.configfile}']
 
         # Add the science images.
-        if type(science) == list:
-            if len(science) == 2:
-                basecmd += [f'img1={science[0]}', f'img2={science[1]}']
-                name = os.path.basename(science[1]).replace(".fits","_profound")
+        if type(science_path) == list:
+            if len(science_path) == 2:
+                basecmd += [f'img1={science_path[0]}', f'img2={science_path[1]}']
+                name = os.path.basename(science_path[1]).replace(".fits", "_profound")
             else:
                 raise ValueError('Double image mode requires a list of weight paths of the '
                     'form [detection, measurement].') 
             
-        elif isinstance(science, str):
-            basecmd.append(f'img1={science}')
-            name = os.path.basename(science).replace(".fits","_profound")
+        elif isinstance(science_path, str):
+            basecmd.append(f'img1={science_path}')
+            name = os.path.basename(science_path).replace(".fits", "_profound")
 
         else:
             raise ValueError('Image inputs are not the correct format. Use strings for single image'
@@ -170,7 +192,6 @@ class ProFound():
 
         if isinstance(cat_name, type(None)):
             cat_name = name
-
         out_name = f'{outdir}/{cat_name}'
 
         # Get a comma seperated list of outputs.
@@ -186,24 +207,40 @@ class ProFound():
         for key, value in parameters.items():
             basecmd.append(f'{key}={value}')
         
-        # Add the catalogue name.
+        # Add the catalogue name and output directory.
         basecmd.append(f'cat_name={cat_name}')
-
-        # Finally the output directory.
         basecmd.append(f'outdir={outdir}')
 
-        # Now run on the command line.     
-        p = subprocess.Popen(basecmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                     text=True, cwd=self.crest_path)
-        for line in p.stderr:
-            print(line)
-        out, err = p.communicate()  
+        # Now run on the command line.
+        p = subprocess.Popen(basecmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        out, err = p.communicate()
 
-        # Get the catalogue name and return it.
-        if p.returncode == 0:
-            if 'out_name:' in out:
-                out_name = out.split('out_name:')[1].strip()
-                return out_name
-        else:
-            raise RuntimeError('ProFound encountered an error. Check the '
-                    'output for further information.')  
+        if err:
+            for line in err.splitlines():
+                print(line)
+
+        if p.returncode != 0:
+            raise RuntimeError(
+                'ProFound encountered an error.\n'
+                f'Command: {" ".join(basecmd)}\n'
+                f'Stdout:\n{out}\n'
+                f'Stderr:\n{err}'
+            )
+
+        if 'out_name:' not in out:
+            raise RuntimeError(
+                'ProFound completed without returning an output catalogue name.\n'
+                'Expected token "out_name:" was not found in stdout.\n'
+                f'Stdout:\n{out}\n'
+                f'Stderr:\n{err}'
+            )
+
+        out_name = out.split('out_name:')[1].strip()
+        if out_name == '':
+            raise RuntimeError(
+                'ProFound returned an empty output catalogue name.\n'
+                f'Stdout:\n{out}\n'
+                f'Stderr:\n{err}'
+            )
+
+        return out_name

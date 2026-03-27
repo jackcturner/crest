@@ -1,5 +1,3 @@
-#!/usr/bin/env Rscript
-
 # Import the relevent libraries.
 library(ProFound)
 library(Rfits)
@@ -22,36 +20,40 @@ if (length(file_arg) > 0) {
 }
 source(file.path(script_dir, "utils.R"))
 
-# Function for identifying and replacing environment variables.
-expand_env_var <- function(string) {
-  pattern <- "\\$\\{?([A-Za-z_][A-Za-z0-9_]*)\\}?"
-
-  str_replace_all(string, pattern, function(match) {
-    var_name <- gsub("\\$\\{?([A-Za-z_][A-Za-z0-9_]*)\\}?", "\\1", match)
-    Sys.getenv(var_name, unset = "")
-  })
-}
-
 # This is the main ProFound class.
 # Written to be useable directly from R if required.
-ProFound <- setRefClass("profound", fields = list(config_path = "character", config = "list"),
+ProFound <- setRefClass("profound", fields = list(config_path = "character", config = "list",
+                                                  verbose = "logical"),
 
                         # Class for running ProFound in single or dual
                         # image mode uisng a config file and producing
                         # an hdf5 catalogue.
 
-                        methods = list(initialize = function(config_path) {
+                        methods = list(initialize = function(config_path, verbose = TRUE) {
 
                           # initialize method for ProFound.
 
                           # Arguments
                           # ---------
                           # config_path (str)
-                          #   Path to the ".yml" configuration file.
+                          #   Path to the YAML configuration file.
+                          # verbose (bool)
+                          #   If TRUE, print progress messages.
 
                           # Store the config filepath and content.
                           .self$config_path <- config_path
                           .self$config <- yaml.load_file(config_path)
+                          .self$verbose <- verbose
+                        },
+
+                        vmessage = function(...) {
+
+                          # Print a message only when verbosity is
+                          # enabled.
+
+                          if (isTRUE(.self$verbose)) {
+                            message(...)
+                          }
                         },
 
                         expand_env_var = function(string) {
@@ -108,7 +110,7 @@ ProFound <- setRefClass("profound", fields = list(config_path = "character", con
                           }
 
                           # If "iters" not provided, copy "iters_det".
-                          # The former is need for single image mode.
+                          # The former is needed for single image mode.
                           if (!("iters" %in% names(new_config))) {
                             new_config[["iters"]] <- new_config[["iters_det"]]
                           }
@@ -156,7 +158,7 @@ ProFound <- setRefClass("profound", fields = list(config_path = "character", con
                         },
 
                         measure_depth = function(science, psf, mask = NULL, error = NULL,
-                                                 parameters = hash(), radius = 3.33, max_apers = 50,
+                                                 parameters = NULL, radius = 3.33, max_apers = 50,
                                                  max_iters = 50000) {
 
                           # Measure the 5-sigma point source depth of an
@@ -192,6 +194,10 @@ ProFound <- setRefClass("profound", fields = list(config_path = "character", con
                           # -------
                           # depth (float)
                           #   The 5-sigma depth of the image.
+
+                          if (is.null(parameters)) {
+                            parameters <- hash()
+                          }
 
                           # Update the config file.
                           configs <- .self$update_config(parameters)
@@ -295,7 +301,7 @@ ProFound <- setRefClass("profound", fields = list(config_path = "character", con
                               break
                             }
                           }
-                          message(glue("Placed {i-1} apertures."))
+                          .self$vmessage(glue("Placed {i-1} apertures."))
 
                           # Even with an aperture, ProFound will only
                           # consider pixels in the segmentation map.
@@ -330,13 +336,11 @@ ProFound <- setRefClass("profound", fields = list(config_path = "character", con
 
                           depth <- (5 * mad_) / f(radius)
 
-                          print(depth)
-
                           return(depth)
 
                         },
 
-                        extract = function(science, parameters = hash(), outputs = NULL,
+                        extract = function(science, parameters = NULL, outputs = NULL,
                                            cat_name = NULL, outdir = "./") {
 
                           # Main extraction method for ProFound.
@@ -365,6 +369,10 @@ ProFound <- setRefClass("profound", fields = list(config_path = "character", con
                           # cat_name (str)
                           #   The full path to the hdf5 catalogue.
 
+                          if (is.null(parameters)) {
+                            parameters <- hash()
+                          }
+
                           configs <- .self$update_config(parameters)
                           img_config <- configs[["new_config"]]
                           att_config <- configs[["att_config"]]
@@ -389,13 +397,13 @@ ProFound <- setRefClass("profound", fields = list(config_path = "character", con
                           # Are we in single or dual image mode?
                           single <- TRUE
                           if (length(science) == 1) {
-                            message("Running in single image mode.")
+                            .self$vmessage("Running in single image mode.")
                             sci <- Rfits_point(science)
                             hdr <- sci$keyvalues
                             temp_name <- glue("{outdir}/{gsub('.fits', '_profound.hdf5', basename(science))}")
 
                           } else if (length(science) == 2) {
-                            message("Running in double image mode.")
+                            .self$vmessage("Running in double image mode.")
                             single <- FALSE
                             det <- Rfits_point(unlist(science[1]))
                             sci <- Rfits_point(unlist(science[2]))

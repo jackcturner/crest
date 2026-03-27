@@ -21,17 +21,24 @@ from photutils.segmentation import detect_sources, deblend_sources, SourceCatalo
 from photutils.utils import ImageDepth
 
 from crest.utils import measure_curve_of_growth
+from crest.utils import _parallel_execute, _tile_worker, _construct_tiles
 
 class Photutils():
+    """
+    Wrap Photutils, allowing it to be used in a manner consistent with
+    Source Extractor and produce hdf5 catalogues.
+    """
 
-    def __init__(self, config_file):
+    def __init__(self, config_file, verbose=True):
         """
         __init__ method for Photutils.
 
         Arguments
         ---------
         config_file (str)
-            Path to ".yml" configuration file.
+            Path to YAML configuration file.
+        verbose (bool)
+            If True, print progress messages.
         """
 
         # Store the configuration file path
@@ -40,6 +47,8 @@ class Photutils():
         # and the content.
         with open(self.configfile, 'r') as file:
             self.config = next(yaml.safe_load_all(file))
+
+        self.verbose = verbose
 
         # List of outputs produced by SourceCatalogue.
         self.output_names = [
@@ -63,6 +72,14 @@ class Photutils():
         # May need this later.
         self._cat_name = None
 
+    def _vprint(self, *args, **kwargs):
+        """
+        Print only when verbose output is enabled.
+        """
+
+        if self.verbose:
+            print(*args, **kwargs)
+
     def _update_config(self, parameters):
         """
         Copy and update the stored config with parameters provided 
@@ -81,13 +98,11 @@ class Photutils():
             Config with values appropriate for saving to hdf5.
         """
 
-        # Copy the stored parameter file.
-        new_config = copy.deepcopy(self.config)
-
         # Update with the given parameters.
+        new_config = copy.deepcopy(self.config)
         new_config.update(parameters)
 
-         # Store the config as is for saving as hdf5 attributes.
+         # Store as is for saving as hdf5 attributes.
         att_config = copy.deepcopy(new_config)
 
         # Expand any environment variables and convert string to None.
@@ -106,13 +121,11 @@ class Photutils():
         Arguments
         ---------
         sci (numpy.ndarray)
-            2D array of science image values.
+            The 2D array from which to measure the background.
         err (numpy.ndarray)
-            2D array matching the shape of sci, containing the 
-            corresponding error values.
+            The corresponding error map.
         config (dict)
-            Key value pairs defining the background measurement 
-            parameters.
+            Dictionary of background configration arguments.
 
         Returns
         -------
@@ -129,17 +142,16 @@ class Photutils():
         rms_est = {'Std':pb.StdBackgroundRMS(), 'MADStd':pb.MADStdBackgroundRMS(), 
                    'BiweightScale':pb.BiweightScaleBackgroundRMS()}
         
-        # Set up the coverage mask.
-        coverage_mask = np.isnan(sci)
+        # Set up the coverage and source mask.
+        coverage_mask = ~np.isfinite(sci)
         if isinstance(err, type(None)) == False:
-            coverage_mask += (err <= 0) + np.isnan(err)
+            coverage_mask += (err <= 0) + (~np.isfinite(err))
         
-        # Use source mask if provided.
         mask = None
         if config['SOURCE_MASK'] != None:
             mask = fits.getdata(config['SOURCE_MASK'])
 
-        # Get the sigma clipping object.
+        # Construct the sigma clipping object.
         sigma_clip = None
         if config['SIGMA_CLIP'] == True:
             sigma_clip = SigmaClip(sigma_lower=config['SIGMA'][0], sigma_upper=config['SIGMA'][1], 
@@ -151,7 +163,7 @@ class Photutils():
         interpolator = interpolators.get(config['INTERPOLATOR'])
 
         # Calculate the 2D background.
-        print('Measuring the 2D sky background...')
+        self._vprint('Measuring the 2D sky background...')
         bkg = pb.Background2D(
             sci, box_size=config['BOX_SIZE'], mask=mask, coverage_mask=coverage_mask, fill_value=0,
             exclude_percentile=config['EXCLUDE_PERCENTILE'], filter_size=config['FILTER_SIZE'],
@@ -168,10 +180,9 @@ class Photutils():
         Arguments
         ---------
         sci (numpy.ndarray)
-            2D array of science image values.
+            The 2D array from which to measure the background.
         err (numpy.ndarray)
-            2D array matching the shape of sci, containing the 
-            corresponding error values.
+            The corresponding error map.
         bkg (photutils.background.Background2D)
             Photutils background object measured from the science image.
         config (dict)
@@ -185,10 +196,10 @@ class Photutils():
 
         # Replace off detector regions with median background so 
         # convolution doesn't smear them.
-        mask = (err <= 0) + np.isnan(err) + np.isnan(sci) + (sci == 0)
+        mask = (err <= 0) + (~np.isfinite(err)) + (~np.isfinite(sci))
         sci = np.where(mask == True, bkg.background_median, sci)
 
-        # Generate kernel based on provided FWHM and size.
+        # Generate kernel and convolve.
         kernel_map = {
             'Gaussian': Gaussian2DKernel(x_stddev=config['FWHM'] * gaussian_fwhm_to_sigma,
                                          y_stddev=config['FWHM'] * gaussian_fwhm_to_sigma,
@@ -198,11 +209,39 @@ class Photutils():
         }
         kernel = kernel_map[config['FILTER']]
 
-        # Generate kernel based on provided FWHM and convolve.
-        sci = convolve_fft(sci, kernel, boundary='fill', fill_value=bkg.background_median,
-                            nan_treatment='interpolate', preserve_nan=True, allow_huge=True)
-            
-        # Revert to zeros in the off detector region.
+        # If no tiling requested, convolve the full image.
+        n_tiles = config.get('N_TILES', 1)
+        if n_tiles <= 1:
+            sci = convolve_fft(sci, kernel, mask=mask, preserve_nan=True, allow_huge=True)
+
+        else:
+
+            # Otherwise, compute halo size.
+            kh = int(np.ceil(max(kernel.shape) // 2))
+
+            # Split into tiles.
+            ny, nx = sci.shape
+            convolved_sci = np.zeros_like(sci, dtype=np.float32)
+            slices = _construct_tiles((ny, nx), int(n_tiles), kh)
+
+            # Prepare tasks for each tile.
+            tasks = []
+            for s in slices:
+                y0, y1, x0, x1, e0, e1, f0, f1 = s
+                block = sci[e0:e1, f0:f1]
+                mask_block = mask[e0:e1, f0:f1]
+                tasks.append({'block': block, 'mask': mask_block,
+                              'kernel': kernel, 'slices': s})
+
+            # Execute in parallel and stitch tiles back together.   
+            workers = max(int(config.get('N_WORKERS', 1)), 1)
+            results = _parallel_execute(_tile_worker, tasks, workers)
+            for res in results:
+                y0, y1, x0, x1, interior = res
+                convolved_sci[y0:y1, x0:x1] = interior
+
+            sci = convolved_sci
+
         sci = np.where(mask == True, 0, sci)
                 
         return sci
@@ -214,10 +253,9 @@ class Photutils():
         Arguments
         ---------
         sci (numpy.ndarray)
-            2D array of science image values.
+            The 2D array from which to measure the background.
         err (numpy.ndarray)
-            2D array matching the shape of sci, containing the 
-            corresponding error values.
+            The corresponding error map.
         config (dict)
             Key value pairs defining the detection parameters.
 
@@ -228,19 +266,17 @@ class Photutils():
             sources are marked by different positive integer values. 
         """
 
-        # Compute the detection threshold.
-        threshold = config['N_SIGMA'] * err
-
         # Mask off detector regions.
-        mask = (err <= 0) + np.isnan(err) + np.isnan(sci)
+        mask = (err <= 0) + (~np.isfinite(err)) + (~np.isfinite(sci))
 
         # Generate the segmentation image.
-        print('Detecting sources...')
-        seg_image = detect_sources(sci, threshold=threshold, npixels=config['N_PIXELS'],
-                                    connectivity=config['CONNECTIVITY'], mask = mask)
+        self._vprint('Detecting sources...')
+        seg_image = detect_sources(
+            sci, threshold=config['N_SIGMA'] * err, npixels=config['N_PIXELS'],
+            connectivity=config['CONNECTIVITY'], mask=mask)
         
         # and then deblend it.
-        print('Deblending sources...')
+        self._vprint('Deblending sources...')
         seg_image = deblend_sources(sci, seg_image, config['N_PIXELS'], nlevels=config['N_LEVELS'],
                                     contrast=config['CONTRAST'], mode=config['MODE'],
                                     connectivity=config['CONNECTIVITY'], relabel=True,
@@ -265,7 +301,7 @@ class Photutils():
         napers (int)
             The maximum number of apertures to place.
         overlap (bool)
-            Should the apertures be allowed to overlap.
+            Should the apertures be allowed to overlap?
         overlap_maxiters (int)
             The number of attempts at placing a non-overlapping aperture.
         
@@ -280,41 +316,34 @@ class Photutils():
         depth = ImageDepth(radius, nsigma=1.0, napers=napers, niters=1, overlap=overlap,
                            overlap_maxiters=overlap_maxiters)
         limits = depth(sci, mask)
-        print(f' Placed {int(depth.napers_used)} apertures.')
+        self._vprint(f' Placed {int(depth.napers_used)} apertures.')
 
-        # Get the location of the apertures.
         locations = depth.apertures[0].positions
 
         # Construct the detection image.
-        x = []
-        y = []
-        for i in np.round(locations).astype(int):
-            x.append(i[0])
-            y.append(i[1])
-
         det = np.zeros(sci.shape)
         for i in np.round(locations).astype(int):
             det[i[1], i[0]] = 1
 
         return det
     
-    def measure_depth(self, science, psf, mask=None, error=None, parameters=None, radius=3.33, 
-                      max_apers=50, max_iters=50000):
+    def measure_depth(self, science_path, psf_path, mask_path=None, error_path=None, 
+                      parameters=None, radius=3.33, max_apers=50, max_iters=50000):
         """
         Use randomly placed apertures to measure the average 
         5-sigma depth of an image.
         
         Arguments
         ---------
-        science (str)
+        science_path (str)
             Filename of science fits image.
-        psf (str)
+        psf_path (str)
             Filename of the PSF fits image used to scale the aperture 
             depths to total.
-        mask (None, str)
+        mask_path (None/str)
             Filename of the fits image mask. If None, generate and use
-            a SE segmentation map.
-        error (None, str)
+            a SEP segmentation map.
+        error_path (None/str)
             Filename of fits error map. If None, no weighting will be 
             used if generating a mask and only NaN non-source pixels will
             be masked.
@@ -334,7 +363,7 @@ class Photutils():
             The 5-sigma depth of the image.
         """
 
-        print(f'Measuring 5-sigma depth of {os.path.basename(science)}.')
+        self._vprint(f'Measuring 5-sigma depth of {os.path.basename(science_path)}.')
 
         if parameters is None:
             parameters = {}
@@ -343,23 +372,23 @@ class Photutils():
         depth_config, _ = self._update_config(parameters)
         depth_config['BKG_SUB'] = False
 
-        sci, hdr = fits.getdata(science, header=True)
+        sci, hdr = fits.getdata(science_path, header=True)
 
         # Load RMS map if available.
         bkg = None
-        if isinstance(error, type(None)):
+        if isinstance(error_path, type(None)):
             bkg = self._measure_background(sci, None, depth_config)
             err = bkg.background_rms
         else:
-            err = fits.getdata(error)
+            err = fits.getdata(error_path)
 
         # Has a source mask been provided?
-        if isinstance(mask, str):
-            source_mask = fits.getdata(mask)
+        if isinstance(mask_path, str):
+            source_mask = fits.getdata(mask_path)
 
         # If not, generate it.
         else:
-            print('Generating source mask.')
+            self._vprint('Generating source mask.')
 
             # Filter the image if required.
             if depth_config['FILTER'] != None:
@@ -375,12 +404,12 @@ class Photutils():
                 source_mask = self._segmentation(sci, err, depth_config).data
 
         # Construct the full source and coverage mask.
-        mask = np.isnan(sci) | np.isnan(err) | (err <= 0)  
+        mask = (~np.isfinite(sci)) | (~np.isfinite(err)) | (err <= 0)
         full_mask = mask | (source_mask != 0)  
 
         # Get the random aperture locations and construct and image with
         # ones at these coordinates.
-        print('Placing random apertures...')
+        self._vprint('Placing random apertures...')
         det = self._get_aperture_locations(sci, full_mask, radius, max_apers, False, max_iters) 
 
         # Perform aperture photometry.
@@ -391,10 +420,10 @@ class Photutils():
         # Calculate the Gaussian-like MAD of the fluxes.
         flux = getattr(ap_cat, f'APER_0_flux')*depth_config['CONVERSION']
         s = (flux != 0) & (np.isfinite(flux))
-        mad = median_abs_deviation(flux, nan_policy='omit', scale='normal')
+        mad = median_abs_deviation(flux[s], nan_policy='omit', scale='normal')
 
         # Measure the PSF curve of growth and interpolate.
-        psf_ = fits.getdata(psf)
+        psf_ = fits.getdata(psf_path)
         radii = np.arange(0.1, psf_.shape[0], 1)
         radii, cog, p = measure_curve_of_growth(psf_, radii=radii, position=None, 
                                                 norm=False, show=False)
@@ -404,7 +433,7 @@ class Photutils():
         # aperture used and convert to 5 sigma.
         depth = 5*mad/f(radius)
 
-        print('Depth calculation completed! \n')
+        self._vprint('Depth calculation completed! \n')
 
         return depth
     
@@ -418,13 +447,13 @@ class Photutils():
         sci (numpy.ndarray)
             2D science image.
         err (numpy.ndarray)
-            RMS map matching the shape of sci.
+            The corresponding error map.
         seg (numpy.ndarray)
-            Segmentation map measured from sci.
+            2D image indicating the extent of detected sources.
         cat (photutils.segmentation.catalog.SourceCatalog)
-            SourceCatalogue generated by Photutils from sci.
+            SourceCatalogue storing information on detected sources.
         config (dict)
-            Dictionary of SEP configuration parameters.
+            Dictionary of configuration parameters.
         
         Returns
         -------
@@ -432,7 +461,7 @@ class Photutils():
             SourceCatalogue updated with empirical uncertainties.
         """
 
-        print('\nBeginning uncertainty estimation:')
+        self._vprint('\nBeginning uncertainty estimation:')
 
         # Make a local copy of the config.
         err_config = copy.deepcopy(config)
@@ -442,10 +471,10 @@ class Photutils():
         err_config['APERMASK_METHOD'] = None
         err_config['BKG_SUB'] = False 
 
-        # Mask off detector regions and sources.
-        mask = (err <= 0) + np.isnan(err) + np.isnan(sci)
+        # Mask off detector regions.
+        mask = (err <= 0) + (~np.isfinite(err)) + (~np.isfinite(sci))
 
-        # Get the aperture radii.
+        # Separate the radii into small and large components.        
         if err_config['RADII_SPACING'] == 'linear':
             radii = np.linspace(err_config['MIN_RADIUS'], err_config['MAX_RADIUS'], 
                                 err_config['N_RADII'])
@@ -453,16 +482,15 @@ class Photutils():
             radii = np.logspace(np.log10(err_config['MIN_RADIUS']),
                                 np.log10(err_config['MAX_RADIUS']), err_config['N_RADII'])
         
-        # Seperate the radii into small and large components. This way we
-        # only need to run SEP twice.
         smaller = radii < np.median(radii)
         larger = radii >= np.median(radii)
 
+        # For each component.
         app_runs = {'small':smaller, 'large':larger}
         medians = []
         for run, s in app_runs.items():
 
-            # Get the random locations for the apertures.
+            # Measure the median flux in each aperture size.
             det = self._get_aperture_locations(
                 sci, mask+(seg!=0), max(radii[s]), err_config[f'N_{run.upper()}'], False, 
                 err_config['MAX_ITERS'])
@@ -476,52 +504,46 @@ class Photutils():
                 apermask_method=config['APERMASK_METHOD'], kron_params=config['KRON_PARAMS'],
                 detection_cat=None, progress_bar=False)
         
-            # Measure the median flux in each aperture size.
             for i, r in enumerate(radii[s]):
                 ap_cat.circular_photometry(r, f'APER_{i}', overwrite=False)
                 medians.append(median_abs_deviation(getattr(ap_cat, f'APER_{i}_flux'), 
                                                     nan_policy='omit', scale='normal'))
 
-        # Defining the model to fit. 
+        # The noise model to fit. 
         sig1 = sigma_clipped_stats(sci, mask+(seg!=0))[2]   
         Npix = np.pi * (radii**2)    
         def model(theta, Npix=Npix):
             a, b = theta
             return sig1 * a * (Npix**b)
         
-        # Using a chi2 log-likelihood function.
+        # Define the likelihood function and priors.
         def lnlike(theta, x, y, yerr):
             return -0.5 * np.sum(((y - model(theta, x)) / yerr)** 2)
         
-        # Setting allowed ranges for the free parameters.
         def lnprior(theta):
             a, b = theta
             if -1e9 < a < 1e9 and -1e9 < b < 1e9:
                 return 0.0
             return -np.inf
         
-        # Set up the MCMC.
         def lnprob(theta, x, y, yerr):
             lp = lnprior(theta)
             if not np.isfinite(lp):
                 return -np.inf
             return lp + lnlike(theta, x, y, yerr)
-    
-        # The percentage error to use when fitting. 
-        # Can help weight small or large apertures.
-        Merr = err_config['P_ERR']*np.array(medians)
-
-        # Collect the x,y and error data.
-        data = (Npix, medians, Merr)
-
+        
         # Set the step methodology.
         initial = np.array(err_config['INITIAL'])
         p0 = [initial + 1e-7 * np.random.randn(len(initial)) for i in range(err_config['WALKERS'])] 
+    
+        # The percentage error to use when fitting. 
+        Merr = err_config['P_ERR']*np.array(medians)
         
         # Begin the MCMC
-        sampler = emcee.EnsembleSampler(err_config['WALKERS'], len(initial), lnprob, args = data)
+        sampler = emcee.EnsembleSampler(err_config['WALKERS'], len(initial), lnprob,
+                                        args=(Npix, medians, Merr))
 
-        print(' Running MCMC...')
+        self._vprint(' Running MCMC...')
         p0, _, _ = sampler.run_mcmc(p0, err_config['BURN_IN'])
         sampler.reset()
         pos, prob, state = sampler.run_mcmc(p0, err_config['N_ITERS'])
@@ -529,13 +551,9 @@ class Photutils():
         # Get most likely parameter values.
         samples = sampler.flatchain
         theta_max  = samples[np.argmax(sampler.flatlnprobability)]
-        print(f' Most likely parameter values: {theta_max}.')
+        self._vprint(f' Most likely parameter values: {theta_max}.')
 
-        # We now want the radii of the apertures used for photometry.
-        radii = err_config['RADII']
-
-        # Median error value of the whole map. Will use this to scale 
-        # the errors.
+        # Median error value of the whole map. 
         median_err = np.median(err[~mask])
 
         # Expecting a few NaNs so quiet any warnings.
@@ -545,10 +563,20 @@ class Photutils():
             # Will scale errors by this relative value.
             rel_e = err[cat.ycentroid.astype(int), cat.xcentroid.astype(int)] / median_err
 
-            # Scale Kron flux,
-            area = np.pi * (cat.semimajor_sigma * cat.semiminor_sigma * 
-                            np.power(cat.kron_radius * err_config['KRON_PARAMS'][0], 2))
-            cat.add_extra_property('kron_fluxerr_empirical', model(theta_max, area) * rel_e)
+            # Scale Kron flux and minimum circular apertue.
+            k_radius = (err_config['KRON_PARAMS'][0] * cat.kron_radius * 
+                        np.sqrt(cat.semimajor_sigma * cat.semiminor_sigma))
+            area = np.pi * np.power(k_radius, 2)
+            area_min = np.pi * (err_config['KRON_PARAMS'][2]**2)
+
+            kron_emprical = model(theta_max, area) * rel_e
+            if area_min > 0:
+                 kron_emprical = np.where(k_radius > err_config['KRON_PARAMS'][1], kron_emprical, 
+                                          model(theta_max, area_min) * rel_e)
+            else:
+                kron_emprical = np.where(k_radius > err_config['KRON_PARAMS'][1], kron_emprical, 0)
+                 
+            cat.add_extra_property('kron_fluxerr_empirical', kron_emprical)
             labels.append('kron_fluxerr_empirical')
 
             # Segment flux,
@@ -557,7 +585,7 @@ class Photutils():
             labels.append('segment_fluxerr_empirical')
 
             # and any aperture fluxes.
-            for idx, radius in enumerate(radii):
+            for idx, radius in enumerate(err_config['RADII']):
                 area = np.pi * np.power(radius, 2)
                 cat.add_extra_property(f'APER_{idx}_fluxerr_empirical', 
                                        model(theta_max, area) * rel_e)
@@ -567,46 +595,47 @@ class Photutils():
         if err_config['SAVE_FIG'] == True:
 
             x = np.linspace(0, max(Npix), 10000)
-            fig = plt.figure()
-            ax = plt.gca()
-            plt.scatter(np.sqrt(Npix), medians,s = 15, color = 'white', edgecolors = 'blue',
-                        alpha = 0.8)
-            plt.plot(np.sqrt(x), model(theta_max, x), color = 'grey', linestyle = '--',
-                     linewidth = 1)  
+            fig, ax  = plt.subplots(figsize=(3.78, 3.78))
+            ax.scatter(np.sqrt(Npix), medians, s=15, color='white', edgecolors='blue',
+                       alpha = 0.8)
+            ax.plot(np.sqrt(x), model(theta_max, x), color='grey', linestyle='--',
+                    linewidth=1)  
             title = os.path.basename(self._cat_name).removesuffix('.hdf5')
-            plt.title(title, fontsize = 10)
-            plt.xlabel('sqrt(Number of pixels in aperture)')
-            plt.ylabel('Noise in aperture [counts]')
-            plt.minorticks_on()
-            ax.tick_params(axis = 'both', direction = 'in', which = 'both')
+            ax.set_title(title, fontsize = 10)
+            ax.set_xlabel('sqrt(Number of pixels in aperture)')
+            ax.set_ylabel('Noise in aperture [counts]')
             plt.savefig(self._cat_name.replace('.hdf5', '_noise.png'))
             plt.close()
 
         return labels
     
-    def extract(self, science, error, parameters=None, outputs=None, cat_name=None, outdir='./'):
+    def extract(self, science_path, error_path, parameters=None, outputs=None, 
+                cat_name=None, outdir='./'):
         """
-        Perform background subtraction, filtering, detection and source
-        photometry on a science image and save to a hdf5 catalogue.
+        Main function for extracting sources and measuring photometry 
+        in a science image.
 
         Arguments
         ---------
-        sci (numpy.ndarray)
-            2D array of science image values.
-        err (numpy.ndarray)
-            2D array matching the shape of sci, containing the 
-            corresponding error values.
-        parameters (dict)
-            Keys defining parameters to be overwritten in the config file
-            and their value.
-        outputs (list[str])
-            The quantities to output. See Photutils.output_names for 
-            available parameters.
-        cat_name (None, str)
+        science_path (str/List[str])
+            If str, the filename of the image to extract.
+            If a List[str] filename of detection and measurement images.
+        error_path (None/str/List[str])
+            If None, use global background RMS.
+            If str, path to corresponding error map.
+            If List[str], paths to error maps for detection 
+            and measurement.
+        parameters (dict/None)
+            Key-value pairs overwritting parameters in the config file 
+            just for this run.
+        outputs (None/List[str])
+            The source extraction outputs to save to the catalogue.
+            If None, save all available.
+        cat_name (None/str)
             The base name for the photometry catalogue. If None, use the 
             base name of the measurement file.
         outdir (str)
-            Directory in which to save the output catalogue.
+            The directory in which to store output files.
 
         Returns
         -------
@@ -614,70 +643,62 @@ class Photutils():
             Path to the hdf5 file containing the measured photometry.
         """
 
-        # Make a local copy of the config for updating with provided 
-        # parameters.
-        config = copy.deepcopy(self.config)
+        if os.path.isdir(outdir) == False:
+            raise NotADirectoryError(f'{outdir} is not a directory. Set "outdir" to an existing'
+                                        ' directory.')
 
+        # Update the config file with the provided parameters.
         if parameters is None:
             parameters = {}
-
-        # Update the config with given parameters.
-        config.update(parameters)
-
-        # Store the config as is for saving as hdf5 attributes.
-        att_config = copy.deepcopy(config)
-
-        # Expand any environment variables and convert string to None.
-        for key, value in config.items():
-            if type(value) == str:
-                config[key] = os.path.expandvars(value)
-            if value == 'None':
-                config[key] = None
-
+        config, att_config = self._update_config(parameters)
+ 
         # Are we in double image mode?
         single_mode = False
-        if isinstance(science, list):
-            if len(science) == 2:
-                print('Starting extraction in double image mode.')
+        if isinstance(science_path, list):
+            if len(science_path) == 2:
+                self._vprint('Starting extraction in double image mode.')
             else:
                 raise ValueError('Double image mode requires a list of weight paths of the '
-                    'form [detection, measurement].') 
+                                 'form [detection, measurement].') 
              
             # Have errors been provided.
-            if isinstance(error, list):
-                if len(error) != 2:
+            if isinstance(error_path, list):
+                if len(error_path) != 2:
                     raise ValueError('Double image mode requires a list of weight paths of the '
-                                    'form [detection, measurement].')
+                                     'form [detection, measurement].')
                 
                 # If not, warn the user that the background RMS will be 
                 # used instead.
-                s = [i == None for i in error]  
+                s = [i == None for i in error_path]  
                 if sum(s) == 2:
-                    print('No RMS maps provided. Will use measured background RMS for weighting. \n')
+                    self._vprint('No RMS maps provided. Will use measured '
+                                 'background RMS for weighting. \n')
                 elif sum(s) == 1:
-                    print(f'No RMS map provided for {np.array(["detection", "measurement"])[s][0]}.'
-                          ' Will use measured background RMS for weighting. \n')
-            elif isinstance(error, type(None)):
-                print('No RMS maps provided. Will use measured background RMS for weighting. \n')
-                error = [error] * 2
+                    i = np.array(["detection", "measurement"])[s][0]
+                    self._vprint(f'No RMS map provided for {i}. Will use measured'
+                                 'background RMS for weighting. \n')
+            elif isinstance(error_path, type(None)):
+                self._vprint('No RMS maps provided. Will use measured'
+                             'background RMS for weighting. \n')
+                error_path = [error_path] * 2
             else:
                 raise ValueError('Double image mode requires a list of weight paths of the '
                                 'form [detection, measurement], or None for no weighting.') 
             
         # If not, we should be in single image mode.
-        elif isinstance(science, str):
-            print('Starting extraction in single image mode.')
+        elif isinstance(science_path, str):
+            self._vprint('Starting extraction in single image mode.')
             single_mode = True
             
-            if isinstance(error, type(None)):
-                print('No RMS map provided. Will use measured background RMS for weighting. \n')
-            elif isinstance(error, str) == False:
+            if isinstance(error_path, type(None)):
+                self._vprint('No RMS map provided. Will use measured background RMS for weighting. \n')
+            elif isinstance(error_path, str) == False:
                 raise ValueError('Single image mode requires a string path to a weight map or None '
                                'for no weighting.') 
             
             # Duplicate the inputs to match double image format.
-            science = [science] * 2
-            error = [error] * 2
+            science_path = [science_path] * 2
+            error_path = [error_path] * 2
 
         # If we get here, the inputs are very wrong.   
         else:
@@ -687,18 +708,18 @@ class Photutils():
 
         # Name the catalogue after the measurement image.
         if isinstance(cat_name, type(None)):
-            cat_name = f'{outdir}/{os.path.basename(science[1]).removesuffix(".fits")}_photutils.hdf5'
+            cat_name = f'{outdir}/{os.path.basename(science_path[1]).removesuffix(".fits")}_photutils.hdf5'
         else:
             cat_name = f'{outdir}/{cat_name.split(".")[0]}.hdf5'
         self._cat_name = cat_name
 
         # Load detection image.
-        print(f'Processing {os.path.basename(science[0])}:')
-        sci, hdr = fits.getdata(science[0], header=True)
+        self._vprint(f'Processing {os.path.basename(science_path[0])}:')
+        sci, hdr = fits.getdata(science_path[0], header=True)
 
         # Load RMS map if available.
-        if isinstance(error[0], type(None)) == False:
-            err = fits.getdata(error[0])
+        if isinstance(error_path[0], type(None)) == False:
+            err = fits.getdata(error_path[0])
         else:
             err = None
 
@@ -718,14 +739,14 @@ class Photutils():
         # Identify the sources and save segmentation map.
         segmap = self._segmentation(sci_filt, err, config)
         if config['SEGMAP'] != None:
-            print(f' Saving segmentation map to {outdir}/{config["SEGMAP"]}.fits')
+            self._vprint(f' Saving segmentation map to {outdir}/{config["SEGMAP"]}.fits')
             fits.writeto(f'{outdir}/{config["SEGMAP"]}.fits', segmap.data, hdr, overwrite=True)
 
         # Get the WCS information from the header.
         wcs = WCS(hdr)
 
         # Mask the off detector regions.
-        mask = (err <= 0) + np.isnan(err) + np.isnan(sci)
+        mask = (err <= 0) + (~np.isfinite(err)) + (~np.isfinite(sci))
 
         # Should convolved data be used to measure properties?
         convolved_data = None
@@ -745,12 +766,12 @@ class Photutils():
 
         # If in double image mode, repeat with the measurement images.
         if not single_mode :
-            print(f'Processing {os.path.basename(science[1])}:')
-            sci = fits.getdata(science[1])
+            self._vprint(f'Processing {os.path.basename(science_path[1])}:')
+            sci = fits.getdata(science_path[1])
 
             # Load RMS map if available.
-            if isinstance(error[1], type(None)) == False:
-                err = fits.getdata(error[1])
+            if isinstance(error_path[1], type(None)) == False:
+                err = fits.getdata(error_path[1])
             else:
                 err = None
 
@@ -768,7 +789,7 @@ class Photutils():
                 sci_filt = sci
 
             # Mask the off detector regions.
-            mask = (err <= 0) + np.isnan(err) + np.isnan(sci)
+            mask = (err <= 0) + (~np.isfinite(err)) + (~np.isfinite(sci))
 
             # Should convolved data be used to measure properties?
             convolved_data = None
@@ -780,7 +801,7 @@ class Photutils():
                                     ' but filtering is turned off')
 
             # Measure the photometry.
-            print('Measuring source properties...')
+            self._vprint('Measuring source properties...')
             cat = SourceCatalog(
                 sci, segmap, convolved_data=convolved_data, error=err, mask=mask,
                 background=bkg.background, localbkg_width=config['LOCALBKG_WIDTH'], 
@@ -811,8 +832,6 @@ class Photutils():
 
         # Now add everything to the hdf5 catalogue.
         with h5py.File(cat_name, 'w') as f:
-
-            # Add contents to a "photometry" group.
             f.create_group('photometry')
 
             # If no outputs requested, use all bar the image cutouts.
@@ -841,8 +860,8 @@ class Photutils():
                     else:
                         f[f'photometry/{output}'] = attr[s]
                 else:
-                    print(f'Skipping {output} as it is not a recognised output quantity. ' 
-                          'Check Photutils.output_names for available outputs.')
+                      self._vprint(f'Skipping {output} as it is not a recognised output quantity. '
+                                   'Check Photutils.output_names for available outputs.')
 
             # Add the config parameters as attributes.
             for key, value in att_config.items():
@@ -850,6 +869,6 @@ class Photutils():
             f['photometry'].attrs['CODE'] = 'Photutils'
             f['photometry'].attrs['VERSION'] = photutils.__version__
 
-        print(f'Completed extraction and saved to {cat_name}')
+        self._vprint(f'Completed extraction and saved to {cat_name}')
 
         return cat_name

@@ -1,5 +1,3 @@
-#!/usr/bin/env Rscript
-
 library(hash)
 library(glue)
 `%notin%` <- Negate(`%in%`)
@@ -7,23 +5,21 @@ library(glue)
 # Function to parse command-line arguments.
 parse_args <- function(args) {
 
-  # Initialize an empty list to store the arguments
   arg_list <- list()
 
-  # Loop through each argument
+  # Split each argument on '='.
   for (arg in args) {
-    # Split the argument on '='
+
     parts <- strsplit(arg, "=")[[1]]
 
-    # Ensure we have exactly two parts.
+    # Ensure there are exactly two parts.
     if (length(parts) == 2) {
       arg_name <- parts[1]
       arg_value <- parts[2]
 
-      # Try to convert the value to numeric if possible.
+      # Store and convert to numeric if possible.
       numeric_value <- suppressWarnings(as.numeric(arg_value))
 
-      # Store the argument in the list, convert to numeric if it's a valid number.
       if (!is.na(numeric_value)) {
         arg_list[[arg_name]] <- numeric_value
       } else {
