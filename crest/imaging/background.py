@@ -475,7 +475,7 @@ class Background():
             bitmask = np.zeros(sci.shape,np.uint32)
 
             # First level is for masking pixels off the detector.
-            off_detector_mask = (~np.isfinite(wht)) | (wht <= 0) | np.isnan(sci) | np.isnan(wht)
+            off_detector_mask = (~np.isfinite(wht)) | (wht <= 0) | (~np.isfinite(sci))
             mask = off_detector_mask.copy()
             bitmask = np.bitwise_or(bitmask, np.left_shift(off_detector_mask.astype(np.uint32), 0))
 
@@ -798,7 +798,7 @@ def block_validate(science_path, bkgsub_path, weight_path, mask_path=None, max_b
     # Construct a detector mask.
     with fits.open(weight_path) as hdul:
         weight = np.asarray(hdul[0].data, dtype=np.float32)
-        mask = (weight <= 0) | (~np.isfinite(weight)) | np.isnan(weight)
+        mask = (weight <= 0) | (~np.isfinite(weight))
 
         # also mask sources.
         if mask_path is not None:
@@ -886,7 +886,7 @@ def distance_validate(science_path, bkgsub_path, weight_path, max_dist=50):
 
     with fits.open(weight_path) as hdul:
         weight = np.asarray(hdul[0].data, dtype=np.float32)
-        combined_mask = (tiermask > 0) | (weight <= 0) | (~np.isfinite(weight)) | np.isnan(weight)
+        combined_mask = (tiermask > 0) | (weight <= 0) | (~np.isfinite(weight))
     del weight
 
     with fits.open(science_path) as hdul:

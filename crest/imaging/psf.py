@@ -1191,8 +1191,7 @@ class PSF():
             sci, sci_hdr = fits.getdata(self.filenames[band][0], header=True)
             err, err_hdr = fits.getdata(self.filenames[band][1], header=True)
 
-            mask = (np.isnan(err) | ~np.isfinite(err) | (err <= 0) | np.isnan(sci) | 
-                    ~np.isfinite(sci))
+            mask = (~np.isfinite(err)) | (err <= 0) | (~np.isfinite(sci))
 
             n_tiles = config.get('N_TILES', 1)
             if n_tiles <= 1:

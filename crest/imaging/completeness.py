@@ -263,8 +263,7 @@ def measure_completeness(science_path, weight_path, psf_path, bins, config_path,
 
     # Apply all the additional masks.
     with fits.open(weight_path) as wht:
-            unmasked = unmasked & ((wht[0].data > 0) & (~np.isnan(wht[0].data)) & 
-                                   (np.isfinite(wht[0].data)))
+            unmasked = unmasked & (wht[0].data > 0) & (np.isfinite(wht[0].data))
     with fits.open(mask_path) as seg:
             seg_mask = (seg[0].data != 0)
             if dilate > 0:

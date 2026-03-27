@@ -90,7 +90,7 @@ def create_edge_mask(image_paths, off_image=0, buffer_size=5, threshold=0.1, n_p
         sci = nd.binary_fill_holes(sci)
 
         # Identify off-image regions
-        off_image_mask = (sci == off_image) | (np.isnan(sci))
+        off_image_mask = (sci == off_image) | (~np.isfinite(sci))
 
         # Do not create a mask if the edge identified is with this many
         # pixels of the image edge.
