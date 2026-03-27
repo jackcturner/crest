@@ -15,8 +15,6 @@ import astropy.units as u
 from astropy.nddata import Cutout2D
 from astropy.wcs import WCS
 
-from astroquery.gaia import Gaia
-
 def merge_catalogues(catalogue_paths, labels, merged_path='merged_catalogue.hdf5'):
     """
     Combine multiple hdf5 catalogues produced by CREST into a single 
@@ -444,6 +442,7 @@ def inspect_gaia(imgs, gaia_table="gaiadr3.gaia_source"):
     """
 
     # Select the appropriate GAIA table and return all rows.
+    from astroquery.gaia import Gaia
     Gaia.MAIN_GAIA_TABLE = gaia_table
     Gaia.ROW_LIMIT = -1
 
