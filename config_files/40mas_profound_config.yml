@@ -1,0 +1,113 @@
+# Image
+#------
+pixscale: 0.04    # The pixel scale of the image. If 1, output quntities per pixel.
+
+# Background
+#-----------
+sky: 0    # Estimate of the absolute sky level. NULL to compute internally.
+skyRMS: NULL    # Estimate of the RMS of the sky. NULL to compute internally.
+box: 75    # The sky estimate box size of the detection and measurement images.
+grid: 75    # The resolution of the background grid to estimate the detection and measurement sky.
+
+redosegim: FALSE    # Should the segmentation map be modified using the interim 'better sky'?
+redosky: FALSE   # Should the sky and sky RMS grids be re-computed using the final segmentation map?
+redoskysize: 8    # The width/diameter of the dilation kernel to apply to the object mask before performing the initial and final aggressively masked sky estimates. [pixels]
+
+type: bicubic    # The type of interpolation to use. (bilinear, bicubic)
+skytype: median    # The type of sky level estimator used. (median, mean, mode, converge)
+skyRMStype: sd    # The type of sky level estimator used. (quanlo, quanhi, quanboth, sd, converge)
+conviters: 100    # Number of iterative sky convergence steps when using "converge".
+roughpedestal: TRUE    # When the initial "rough sky" is computed, should only a pedestal be used for the sky/skyRMS?
+sigmasel: 1    # The quantile to use when trying to estimate the true standard-deviation of the sky distribution.
+
+skypixmin: 562    # The minimum number of sky pixels desired in each box.
+boxadd: 37    # The dimensions to add to the box to capture more pixels if "skypixmin" has not been achieved. 
+boxiters: 4    # The number of box+boxadd iterations to attempt.
+
+iterskyloc: FALSE    # Should the last segment dilation be used to estimate a local sky value?
+
+doclip: TRUE    # Should the unmasked non-object pixels used to estimate to local sky value be further sigma-clipped?
+shiftloc: FALSE    # Should the cutout centre for the sky shift from "loc" if the desired box size extends beyond the edge of the image?
+paddim: FALSE    # Should the cutout be padded with image data until it meets the desired box size?
+
+rem_mask: TRUE    # Should masked regions be set to NA in sky and skyRMS maps.
+
+# Extraction
+#-----------
+magzero: 28.9    # AB-zeropoint of the detection and measurement images.
+gain: NULL    # The gain of the detection and measurement images.
+
+segim: NULL    # Path to pre-computed segmentation map. If NULL, compute internally.
+iters_det: 6    # The number of curve of growth dilations that should be made to the detection image.
+skycut: 1.5    # The detection threshold in units of the skyRMS.
+pixcut: 5    # The number of pixels required to identify an object.
+tolerance: 15    # The minimum height of the object in the units of skyRMS between its highest point and the point where it contacts another object.
+reltol: -10    # A modifier to "tolerance" modifying it by the ratio of the segment peak flux divided by the saddle point flux to the power "reltol".
+ext: 1    # Radius of the neighbourhood in pixels for the detection of neighbouring objects.
+cliptol: Inf    # If sci-sky/RMS is above this level where segments touch then they are always merged.
+
+smooth: TRUE    # Should the image be istropically smoothed?
+sigma: 2    # Standard deviation of the smoothing.
+
+SBlim: NULL    # The surface brightness threshold to apply. [mag/arcsec^2]
+SBdilate: 1    # How many surface brightness mags beyond the sky RMS to push the dilation process.
+SBN100: 100    # The number of new annulus pixels in the dilated segment required to trigger the "SBdilate" criteria
+shape: disc    # The shape of the dilation kernel.
+threshold: 1.05    # If consecutive iterations have a relative difference within this ratio then the dilation is stopped.
+
+mask: 0    # Path to mask file or pixel value corresponding to masked regions.
+masking: or    # How to deal with masked regions. (and, or)
+
+dotot: TRUE    # Should dilated segment total photometry be computed.
+iters_tot: 2    # The number of curve of additional growth dilations that should be made above the dilated detection segmentation map.
+sizes_tot: 3    # The width/diameter of the dilation kernel in pixels.
+
+docol: FALSE    # Should non-dilated segment colour photometry be computed?
+groupby_mul: segim_orig    # How should the grouped segmentation map be formed that will produce the debelending for cat_tot and cat_col? (segim, segim_orig)
+
+dogrp: FALSE    # Should group segment photometry be computed?
+groupby_det: segim_orig    # How should the grouped segmentation map be formed that will produce the cat_grp output? (segim, segim_orig)
+
+app_diam: 1    # The diameter to use for pseudo aperture photometry. [arcsec]
+
+static_photom: FALSE    # If TRUE set appropriate parameters for static photometry.
+
+pixelcov: FALSE    # Should pixel covariance be considered when computing errors?
+
+# Deblending
+#-----------
+deblend: TRUE    # Should total segment flux be deblended?
+df: 3    # Degrees of freedom for the deblending non-parametric spline fitting.
+radtrunc: 2    # The maximum allowed radius beyond the edge-most segment pixel to consider when deblending.
+Ndeblendlim: Inf    # The limit for the number of pixels to consider in a deblending complex.
+iterative: FALSE    # Should each segment profile fit be subtracted as it goes along?
+watershed: ProFound    # The funciton to use to achieve the watershed deblend. (ProFound, EBImage)
+deblendtype: fit    # The type of deblending to use. (fit, gauss, psf)
+
+psf: NULL    # Path to file storing psf used for deblending.
+fluxweight: sum    # Flux weighting to use with PSF deblending. (sum, peak, none)
+convtype: brute    # The type on convolver to use. (brute, fftw)
+convmode: extended    # How to convolve the sources. (extended, psf)
+
+# Outputs
+#--------
+fluxtype: Jansky    # The flux type to generate. If 'Jansky' or 'microjansky' magzero must be AB.
+flux_conversion: !!float 1e9    # Multiplicative conversion from flux type to desired flux unit.
+
+stats:  TRUE    # Should statistics on the segmented objects be returned.
+rotstats: TRUE    # If TRUE then the "asymm", "flux_reflect" and "mag_reflect" are computed.
+
+boundstats: FALSE   # If TRUE then various pixel boundary statistics are computed.
+nearstats: FALSE    # If TRUE then the IDs of nearby segments are calculated.
+groupstats: FALSE    # If TRUE then the IDs of grouped dilated segments are calculated.
+offset: 1    # The distance to offset when searching for nearby segments. [pixels]
+
+haralickstats: TRUE    # If TRUE then the Haralick texture statistics are computed.
+
+keepsegims: TRUE
+
+lowmemory: FALSE    # If TRUE then a low memory mode of ProFound will be used.
+
+verbose: TRUE    # Should verbose output be displayed to the user?
+
+

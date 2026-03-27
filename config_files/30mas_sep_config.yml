@@ -1,0 +1,68 @@
+# Background
+#-----------
+background_sub: False    # Measure the background of the science image internally?
+background_mask: None    # Path to fits file storing source mask to use during background subtraction.
+background_maskthresh: 0.0    # Mask pixels greater than this value are considered masked.
+bw: 100    # Width of the background box. [pixels]
+bh: 100    # Height of the background box. [pixels]
+fw: 3    # Background filter width. [boxes]
+fh: 3    # Background filter height. [boxes]
+fthresh: -10000    # Filter threshold.
+
+# Extraction
+#-----------
+thresh: 1.5    # Level above background required for detection.
+minarea: 6    # Minimum connect pixels required for detection.
+
+gain: None    # Conversion factor between data array units and poisson counts. 
+
+FILTER: Gaussian    # The type of detection filter to apply. (Gaussian, Tophat)
+FWHM: 3.0    # The FWHM of the detection filter.
+SIZE: 5    # The size of the detection filter in the x and y directions.
+filter_type: conv   # Filter treatment. (matched, conv)
+
+deblend_cont: 0.01    # Minimum contrast ratio used for object deblending. To entirely disable deblending, set to 1.0.
+deblend_nthresh: 32    # The number of thresholds used for deblending.
+
+clean: False    # Clean detections close to bright sources?
+clean_param: 1.0    # Cleaning efficiency.
+
+segmap_name: None    # Filename to use for the segmentation map, or 'None' to discard.
+
+pixstack: 10000000    # The size in pixels of the internal pixel buffer.
+object_limit: 10000   # The limit on the number of sub-objects when deblending. 
+
+# Photometry
+#-----------
+flux_conversion: 21.15    # Conversion from image values to desired flux unit. Use nJy for full FLAGS functionality.
+
+kron_factor: 2.5    # Kron factor for eastimating major and minoraxes.
+min_radius: 1.1    # Minimum radius required for kron photometry. Use circular otherwise.
+int_radius: 6    # Kron integration radius.
+
+radii: []    # Radius of circular apertures in which to measure photometry. [pix]
+
+mask_type: BLANK    # Type of masking to use when calculating photometry. (NONE, BLANK, SEGMENT)
+
+subpix: 5  # Subpixel sampling factor.
+
+# Empirical Errors
+# ----------------
+EMPIRICAL: False    # Whether to perform the empirical estimation.
+
+MIN_RADIUS: 1    # Minimum noise aperture radius in pixels.
+MAX_RADIUS: 40    # Maximum noise aperture radius in pixels.
+N_RADII: 20    # The number of aperture radii to use.
+RADII_SPACING: linear  # The spacing to use when selecting radii between min and max. (linear, log)
+
+N_SMALL: 3000    # The number of apertures with radii below the median to place.
+N_LARGE: 500    # The number of apertures with radii above the median to place.
+MAX_ITERS: 50000    # Maximum attempts at finding a non overlapping aperture before exitting.
+
+WALKERS: 256    # Number of walkers to use in the MCMC.
+BURN_IN: 500   # Number of burn in iterations.
+N_ITERS: 10000    # Number of MCMC iterations.
+P_ERR: 0.05    # Percentage error on each point to use when fitting.
+INITIAL: [1,1]   # Inital parameter guesses. 
+
+SAVE_FIG: False    # Whether to save a plot of noise vs aperture size.

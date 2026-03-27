@@ -1,0 +1,107 @@
+# Background
+#-----------
+ 
+BACK_TYPE: MANUAL    # Approach to background subtraction. (AUTO, MANUAL)
+BACK_VALUE: 0.0    # Default background value in MANUAL mode
+
+BACK_SIZE: 100    # Size of background mesh boxes. (<size>, <width>,<height>)
+BACK_FILTERSIZE: 3    # Number of boxes used for background filtering. (<size>, <width>,<height>)
+ 
+BACKPHOTO_TYPE: GLOBAL    # The background used for photometry measurement. (GLOBAL, LOCAL)
+BACKPHOTO_THICK: 16     # Thickness of the background LOCAL annulus.
+
+# Extraction
+#-----------
+DETECT_TYPE: CCD    # The type of detector. (CCD, PHOTO)
+
+INTERP_MAXXLAG: 2    # Maximum allowed pixel gap in X for interpolation.
+INTERP_MAXYLAG: 2    # Maximum allowed pixel gap in Y for interpolation.
+INTERP_TYPE: ALL    # Which image types should be interpolated. (NONE, VAR_ONLY, ALL)
+
+WEIGHT_TYPE: MAP_RMS,MAP_RMS    # The type of pixel weighting. (NONE, BACKGROUND, MAP_RMS, MAP_VAR, MAP_WEIGHT)
+WEIGHT_GAIN: N    # Is the weight map derived from the detector gain?
+
+DETECT_THRESH: 1.5    # Level above background required for detection. (<sigmas> or <threshold>,<ZP> in mag.arcsec-2)
+DETECT_MINAREA: 6     # Minimum number of connected pixels required for detection.
+ 
+FILTER: Y    # Should smoothing filter be applied for detection? (Y or N)
+FILTER_NAME: /Users/jt458/sextractor-2.25.0/config/gauss_3.0_5x5.conv    # Path to smoothing filter.
+ 
+DEBLEND_NTHRESH: 32    # The number of deblending sub-thresholds.
+DEBLEND_MINCONT: 0.005    # The minimum contrast parameter for deblending
+ 
+CLEAN: N    # Should spurious detections be cleaned? (Y or N)
+CLEAN_PARAM: 1.0    # Cleaning factor.
+ 
+# Photometry
+#-----------
+MASK_TYPE: BLANK    # Approach to nearby source masking. (NONE, BLANK, CORRECT)
+
+PHOT_AUTOPARAMS: 2.5,1.5    # MAG_AUTO parameters. (<Kron_fact>,<min_radius>)
+
+PHOT_AUTOAPERS: 0.0,0.0    # Minimum apertures for MAG_AUTO and MAG_PETRO. (<estimation>,<measurement>)
+
+PIXEL_SCALE: 0    # Size of pixel in arcsec. 0 will use FITS WCS info.
+MAG_ZEROPOINT: 28.08    # Magnitude zero-point.
+SATUR_LEVEL: 60000    # Level in ADUs at which arises saturation.
+MAG_GAMMA: 4.0    # Gamma of emulsion for photographic scans.
+ 
+# S-G Seperation
+#---------------
+ 
+SEEING_FWHM: 0.162    # Stellar FWHM in arcsec.
+STARNNW_NAME: /Users/jt458/sextractor-2.25.0/config/default.nnw    # Neural-Network Weight table filename.
+ANALYSIS_THRESH: 1.5    # Level above background required for S-G analysis. (<sigmas> or <threshold>,<ZP> in mag.arcsec-2)
+ 
+# Outputs
+#--------
+ 
+CHECKIMAGE_TYPE: SEGMENTATION    # The type of checkimage to generate. 
+                                # (NONE, BACKGROUND, BACKGROUND_RMS, 
+                                 # MINIBACKGROUND, MINIBACK_RMS, -BACKGROUND,
+                                 # FILTERED, OBJECTS, -OBJECTS, SEGMENTATION,
+                                 # APERTURES)
+
+CHECKIMAGE_NAME: '/Users/jt458/crest/test_data/segmap.fits'    # Filename of the check-image.
+
+VERBOSE_TYPE: NORMAL    # Verbosity level. (QUIET, NORMAL, EXTRA_WARNINGS, FULL)
+ 
+# Memory
+#-------
+ 
+MEMORY_OBJSTACK: 10000    # Number of objects in stack
+MEMORY_PIXSTACK: 2000000    # Number of pixels in stack
+MEMORY_BUFSIZE: 1024    # Number of lines in buffer
+
+# Misc
+#-----
+
+FLAG_TYPE: OR    # Approch to flagging. (OR, AND, MIN, MAX, MOST)
+
+---
+
+# FLAGS parameters
+#-----------------
+
+TO_FLUX: 21.15   # Factor to convert SExtractor counts to desired flux unit. 
+                # Reccomended to use nJy for full FLAGS functionality.
+
+EMPIRICAL: FALSE   # Whether to perform the empirical estimation.
+
+MIN_RADIUS: 1    # Minimum noise aperture radius in pixels.
+MAX_RADIUS: 50    # Maximum noise aperture radius in pixels.
+N_RADII: 20    # The number of aperture radii to use.
+RADII_SPACING: linear # The spacing to use when selecting radii between min and max. (linear, log)
+
+N_SMALL: 3000    # The number of apertures with radii below the median to place.
+N_LARGE: 500    # The number of apertures with radii above the median to place.
+MAX_ITERS: 50000    # Maximum attempts at finding a non overlapping aperture before exitting.
+
+WALKERS: 256    # Number of walkers to use in the MCMC.
+BURN_IN: 500   # Number of burn in iterations.
+N_ITERS: 10000    # Number of MCMC iterations.
+P_ERR: 0.05    # Percentage error on each point to use when fitting.
+INITIAL: [1,1]    # Inital parameter guesses. 
+
+SAVE_FIG: True    # Whether to save a plot of noise vs aperture size.
+

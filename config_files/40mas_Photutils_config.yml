@@ -3,9 +3,9 @@
 
 BKG_SUB: False    # Should the measured background be subtracted from the science image?
 
-SOURCE_MASK: None   # Path to source mask to use when calculating the background.    
+SOURCE_MASK: None    # Path to source mask to use when calculating the background.    
 
-BOX_SIZE: [100,100]    # The size of the background box along each axis. [pixels]
+BOX_SIZE: [75,75]    # The size of the background box along each y and x axes. [pixels]
 FILTER_SIZE: [3,3]    # The size along each axis of the 2D median filter. [pixels]
 FILTER_THRESH: None    # The threshold value for median filtering. Use None to filter all boxes.
 EDGE_METHOD: pad    # How to edit the image when it is not covered by an interger number of boxes. (pad, crop)
@@ -23,15 +23,15 @@ INTERPOLATOR: 'Zoom'    # The approach to box interpolation (Zoom, IDW)
 #----------
 
 FILTER: Gaussian    # The type of detection filter to apply. (Gaussian, Tophat)
-FWHM: 3.0    # The FWHM of the detection filter.
-SIZE: 5    # The size of the detection filter in the x and y directions.
+FWHM: 2.0    # The FWHM of the detection filter.
+SIZE: 3    # The size of the detection filter in the x and y directions.
 N_TILES: 1    # Number of tiles for convolution. Use >1 to enable tiled convolution.
 N_WORKERS: 1    # Number of workers to use when tiled convolution is enabled.
 
 # Detection
 #----------
 
-N_PIXELS: 6    # The minimum number of connected pixels required for detection.
+N_PIXELS: 5    # The minimum number of connected pixels required for detection.
 N_SIGMA: 1.5    # The threshold above the background RMS at each pixel required for detection.
 CONNECTIVITY: 8    # The number of surrounding pixels considered connected to each pixel. (4, 8)
 
@@ -44,13 +44,13 @@ SEGMAP: None    # File name to use when saving the segmenetation map. Use None t
 # Photometry
 #-----------
 
-KRON_PARAMS: [2.5, 1.5, 0]    # Scaling parameter of the unscaled Kron radius, minimum value for the unscaled Kron radius, minimum circular radius. [-, pixels, pixels]
+KRON_PARAMS: [2.5, 1.1, 0]    # Scaling parameter of the unscaled Kron radius, minimum value for the unscaled Kron radius, minimum circular radius. [-, pixels, pixels]
 RADII: []    # Measure photometry in circular apertures with these radii. [pixels]
-                      # Request output using APER_{idx}_flux and APER_{idx}_fluxerr.
+             # Request output using APER_{idx}_flux and APER_{idx}_fluxerr.
 APERMASK_METHOD: mask    # Approach to nearby source masking. (correct, mask, none)
 LOCALBKG_WIDTH: 0    # The width of the rectangular annulus used to compute a local background around each source. [pixels]
 CONVOLVED: False    # Should the detection filtered image be used to measure source properties?
-CONVERSION: 21.15    # Conversion from image values to desired flux unit.
+CONVERSION: 10    # Conversion from image values to desired flux unit.
 
 # Empirical Errors
 # ----------------
