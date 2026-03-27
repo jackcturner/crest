@@ -1,0 +1,46 @@
+[project]
+name = "astro-crest"
+version = "0.1.0"
+
+# Project description
+description = "A compilation of astronomy cataloguing tools."
+
+# Long description source
+readme = "README.md"
+
+# Minimum Python version
+requires-python = ">=3.10"
+
+license = { file = "LICENSE.md" }
+
+dependencies = [
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "astropy",
+  "photutils",
+  "h5py",
+  "PyYAML",
+  "emcee",
+  "sep",
+  "regions",
+  "opencv-python",
+  "astroquery",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["crest*"]
+
+[tool.setuptools.package-data]
+crest = [
+  "*.mplstyle",
+  "cataloguing/*.R",
+]

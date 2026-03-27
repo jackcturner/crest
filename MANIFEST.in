@@ -1,0 +1,3 @@
+include README.md
+include crest/crest.mplstyle
+recursive-include crest/cataloguing *.R
