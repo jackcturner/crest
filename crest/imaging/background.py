@@ -37,7 +37,7 @@ class Background():
         Arguments
         ---------
         config_path (str)
-            Path to .yml configuration file specifying parameters to use
+            Path to YAML configuration file specifying parameters to use
             at each step.
         verbose (bool)
             If True, print progress messages.
