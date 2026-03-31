@@ -482,12 +482,12 @@ class Background():
             # Scale the detection threshold for low weight regions.
             scaling = np.ones(sci.shape, dtype=np.float32)
 
-            # Find the ratio of weight to median weight.
-            med_wht = np.median(wht[~off_detector_mask])
-            ratio = np.where(off_detector_mask, np.nan, med_wht / wht)
-
             # Turn on scaling above the provided threshold.
             if config['SCALE_THRESH'] != 'None':
+
+                # Find the ratio of weight to median weight.
+                med_wht = np.median(wht[~off_detector_mask])
+                ratio = np.where(off_detector_mask, np.nan, med_wht / wht)
 
                 above_thresh = (ratio > config['SCALE_THRESH'])
                 if np.sum(above_thresh) > 0:
