@@ -651,7 +651,7 @@ class Background():
             # Get tiermask from bgk-subtracted image to get bordermask
             # specific to this image.
             with fits.open(bkgimage) as hdumask:
-                bordermask = hdumask['TIERMASK'].data == 1 
+                bordermask = (np.bitwise_and(hdumask['TIERMASK'].data, 1) != 0)
 
             # Combine the merged and border masks.
             sourcemask = merged_mask | bordermask
