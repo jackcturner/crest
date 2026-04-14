@@ -531,3 +531,61 @@ def gaia_catalogue(tables, spurious=None, outname="gaia_catalogue.fits", append=
     gaia_data_.write(outname, overwrite=True)
 
     return
+
+def flag_mask(catalogue_path, mask_path, bands, label='MASK', X_name='X_IMAGE', 
+              Y_name='Y_IMAGE', indexing=1):
+    """
+    Flag sources with centres within a masked region.
+
+    Assumes SExtractor coordinates so X -> Y, Y -> X.
+    Can be overwritten be specifying X_name, Y_name accordingly.
+    
+    Arguments
+    ---------
+    catalogue_path (str)
+        Filename of hdf5 catalogue with sources to be masked.
+    mask_path (str)
+        Filename fits image mask.
+    bands (List[str])
+        List of photometry sub groups to be considered.
+    label (str)
+        Name to use for the flag dataset.
+    X_name (str)
+        Name of the X coordinate dataset.
+    Y_name (str)
+        Name of the Y coordinate dataset.
+    indexing (int)
+        The type of indexing used. Default is 1 for Source Extractor
+        quantities.
+    """
+
+    mask = fits.getdata(mask_path)
+
+    # Read in the catalogue.
+    with h5py.File(catalogue_path, 'r+') as f:
+
+        # For each band.
+        for band in bands:
+
+            # Round object centres to the nearest pixel.
+            xcen = np.round(f[f'photometry/{band}/{X_name}'][:])
+            ycen = np.round(f[f'photometry/{band}/{Y_name}'][:])
+
+            flag = []
+
+            # If the centre of an object is within the edge region, 
+            # flag it.
+            for x, y in zip(xcen, ycen):
+                if np.isfinite(x) == False or np.isfinite(y) == False:
+                    flag.append(1)
+                elif mask[int(y)-indexing, int(x)-indexing] == True:
+                    flag.append(1)
+                else:
+                    flag.append(0)
+
+            # Add the flag to catalogue, remvoing any previous iteration.
+            if label in f[f'photometry/{band}'].keys():
+                del f[f'photometry/{band}/{label}']
+            f[f'photometry/{band}/{label}'] = flag
+
+    return
