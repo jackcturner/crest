@@ -3,7 +3,7 @@ from crest.cataloguing.sep import SEP
 from crest.cataloguing.photutils import Photutils
 from crest.cataloguing.profound import ProFound
 from crest.cataloguing.utils import (merge_catalogues, match_gaia, correct_extinction, inspect_gaia,
-                                     gaia_catalogue)
+                                     gaia_catalogue, flag_mask)
 
 __all__ = ['SourceExtractor', 'SEP', 'Photutils', 'ProFound', 'merge_catalogues', 'match_gaia', 
-           'correct_extinction', 'inspect_gaia', 'gaia_catalogue']
+           'correct_extinction', 'inspect_gaia', 'gaia_catalogue', 'flag_mask']
