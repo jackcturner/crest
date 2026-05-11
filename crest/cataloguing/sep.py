@@ -783,7 +783,7 @@ class SEP():
         cflux, cfluxerr, cflag, _ = self._measure_photometry(sci_m, err_m, segmap, cat, config, 
                                                             'circular', r_min)
 
-        use_circle = kron * np.sqrt(cat['a'] * cat['b']) < r_min
+        use_circle = (kron / config['kron_factor']) < r_min
         kflux[use_circle] = cflux[use_circle]
         kfluxerr[use_circle] = cfluxerr[use_circle]
         kflag[use_circle] = cflag[use_circle]
