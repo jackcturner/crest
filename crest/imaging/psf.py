@@ -354,21 +354,24 @@ class PSF():
             ax[0, 0].legend()
 
             # The same plot, but zoomed in to the fit region.
-            ratio_median = np.nanmedian(ratio[accept])
+            try:
+                ratio_median = np.nanmedian(ratio[accept])
 
-            ax[0, 1].scatter(mags, ratio, alpha=0.3, color='grey', s=2, label='All peaks')
-            ax[0, 1].scatter(mags[~accept_shift], ratio[~accept_shift], label='Bad shift', c='C1',
-                        alpha=0.8, s=6)
-            ax[0, 1].scatter(mags[i_outlier], ratio[i_outlier], label='Outlier', c='darkred',
-                        alpha=0.8, s=6)
-            ax[0, 1].scatter(mags[accept], ratio[accept], label='Accepted', c='C2', alpha=0.8, s=6)
-            ax[0, 1].plot(np.arange(14,30), lfit(np.arange(14,30)), '--', c='k', alpha=0.3,
-                     label='Slope={:.3f}'.format(lfit.slope.value))
-        
-            ax[0, 1].set_ylim(ratio_median - 1, ratio_median + 1)
-            ax[0, 1].set_xlim(mlim_plot[0], mlim_plot[1])
-            ax[0, 1].set_xlabel(fr'm$_{{\mathrm{{A}}{len(config["RADII"]) - 1}}}$')
-            ax[0, 1].set_ylabel((f'A{len(config["RADII"]) // 2} / A{len(config["RADII"]) - 1}'))
+                ax[0, 1].scatter(mags, ratio, alpha=0.3, color='grey', s=2, label='All peaks')
+                ax[0, 1].scatter(mags[~accept_shift], ratio[~accept_shift], label='Bad shift', c='C1',
+                            alpha=0.8, s=6)
+                ax[0, 1].scatter(mags[i_outlier], ratio[i_outlier], label='Outlier', c='darkred',
+                            alpha=0.8, s=6)
+                ax[0, 1].scatter(mags[accept], ratio[accept], label='Accepted', c='C2', alpha=0.8, s=6)
+                ax[0, 1].plot(np.arange(14,30), lfit(np.arange(14,30)), '--', c='k', alpha=0.3,
+                        label='Slope={:.3f}'.format(lfit.slope.value))
+            
+                ax[0, 1].set_ylim(ratio_median - 1, ratio_median + 1)
+                ax[0, 1].set_xlim(mlim_plot[0], mlim_plot[1])
+                ax[0, 1].set_xlabel(fr'm$_{{\mathrm{{A}}{len(config["RADII"]) - 1}}}$')
+                ax[0, 1].set_ylabel((f'A{len(config["RADII"]) // 2} / A{len(config["RADII"]) - 1}'))
+            except:
+                pass
 
             # Histogram showing aperture ratios.
             bins = np.arange(config["RANGE"][0], config["RANGE"][1], config["WIDTH"])
