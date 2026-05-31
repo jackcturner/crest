@@ -1,5 +1,6 @@
 import os
 import subprocess
+from collections import deque
 from pathlib import Path
 import yaml
 
@@ -44,6 +45,33 @@ class ProFound():
 
         if self.verbose:
             print(*args, **kwargs)
+
+    def _run_command(self, basecmd, keep_lines=2000):
+        if self.verbose:
+            # Stream combined output to avoid deadlocks and keep a full log.
+            self._vprint("Running:", " ".join(basecmd))
+            p = subprocess.Popen(
+                basecmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+            )
+
+            output_lines = deque(maxlen=keep_lines)
+            for line in p.stdout:
+                output_lines.append(line)
+                print(line, end="")
+
+            p.wait()
+            out = "".join(output_lines)
+            err = ""
+        else:
+            p = subprocess.Popen(basecmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            out, err = p.communicate()
+
+        return p.returncode, out, err
 
     def measure_depth(self, science_path, psf_path, mask_path=None, error_path=None, 
                       parameters=None, radius=3.33, max_apers=50, max_iters=50000):
@@ -107,14 +135,13 @@ class ProFound():
             basecmd.append(f'{key}={value}')
 
         # Now run on the command line.
-        p = subprocess.Popen(basecmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        out, err = p.communicate()
+        returncode, out, err = self._run_command(basecmd)
 
         if err:
             for line in err.splitlines():
                 print(line)
 
-        if p.returncode != 0:
+        if returncode != 0:
             raise RuntimeError(
                 'ProFound encountered an error.\n'
                 f'Command: {" ".join(basecmd)}\n'
@@ -212,14 +239,13 @@ class ProFound():
         basecmd.append(f'outdir={outdir}')
 
         # Now run on the command line.
-        p = subprocess.Popen(basecmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        out, err = p.communicate()
+        returncode, out, err = self._run_command(basecmd)
 
         if err:
             for line in err.splitlines():
                 print(line)
 
-        if p.returncode != 0:
+        if returncode != 0:
             raise RuntimeError(
                 'ProFound encountered an error.\n'
                 f'Command: {" ".join(basecmd)}\n'
