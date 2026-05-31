@@ -207,7 +207,8 @@ class SEP():
 
         return cat, segmap
     
-    def _measure_photometry(self, sci, err, segmap, cat, config, type='kron', radius=0):
+    def _measure_photometry(self, sci, err, segmap, cat, config, type='kron', radius=0,
+                            det=None):
         """
         Measure the photometry of detected sources using Kron apertures.
         
@@ -229,6 +230,9 @@ class SEP():
         radius (float)
             The radius of the circular aperture in pixels. Only used when
             type='circular'.
+        det (numpy.ndarray/None)
+            The detection image from which to determine the Kron radius.
+            If None, use the science image.
 
         Return
         ------
@@ -267,9 +271,14 @@ class SEP():
         if type == 'kron':
 
             # First get the kron radius.
-            ap_radius, krflag = sep.kron_radius(
-                sci, cat['x'], cat['y'], cat['a'], cat['b'], cat['theta'], config['int_radius'], 
-                mask=mask, maskthresh=0, seg_id=seg_id, segmap=seg)
+            if isinstance(det, type(None)):
+                ap_radius, krflag = sep.kron_radius(
+                    sci, cat['x'], cat['y'], cat['a'], cat['b'], cat['theta'], config['int_radius'], 
+                    mask=mask, maskthresh=0, seg_id=seg_id, segmap=seg)
+            else:
+                ap_radius, krflag = sep.kron_radius(
+                    det, cat['x'], cat['y'], cat['a'], cat['b'], cat['theta'], config['int_radius'], 
+                    mask=mask, maskthresh=0, seg_id=seg_id, segmap=seg)
             
             ap_radius *= config['kron_factor']
             
@@ -559,13 +568,12 @@ class SEP():
             for column in cat.colnames:
 
                 if column == 'FLUX_AUTO':
-                    area = np.pi * cat['a'] * cat['b'] * np.power(cat['KRON_RADIUS'] * 
-                                                                  err_config['kron_factor'], 2)
+                    area = np.pi * cat['a'] * cat['b'] * np.power(cat['KRON_RADIUS'] * 2)
                     cat['FLUXERR_AUTO_EMPIRICAL'] = (model(theta_max, area) * rel_e * 
                                                      err_config['flux_conversion'])
 
-                    usec = (cat['KRON_RADIUS'] * err_config['kron_factor'] * 
-                            np.sqrt(cat['a'] * cat['b']) < err_config['min_radius'])
+                    usec = (cat['KRON_RADIUS'] * np.sqrt(cat['a'] * cat['b']) < 
+                            err_config['min_radius'])
                     area = np.pi * np.power(err_config['min_radius'], 2)
                     cat['FLUXERR_AUTO_EMPIRICAL'][usec] = (model(theta_max, area) * rel_e[usec] * 
                                                            err_config['flux_conversion'])
@@ -755,8 +763,8 @@ class SEP():
                     bkg.subfrom(sci_m)
 
             # Rerun detect_sources with the previously measured segmap to
-            # get a new catalogue.
-            cat, _ = self._detect_sources(sci_m, err_m, segmap, config)
+            # get a new catalogue. 
+            # cat, _ = self._detect_sources(sci_m, err_m, segmap, config)
 
         # Can't perform aperture photometry if a or b couldn't be 
         # measured. Will set these to zero and flag.
@@ -778,12 +786,12 @@ class SEP():
         # below required radius with cirecular.
         self._vprint('Measuring Kron photometry.')
         kflux, kfluxerr, kflag, kron = self._measure_photometry(sci_m, err_m, segmap, cat, config, 
-                                                                'kron')
+                                                                'kron', sci_d)
         r_min = config['min_radius']
         cflux, cfluxerr, cflag, _ = self._measure_photometry(sci_m, err_m, segmap, cat, config, 
                                                             'circular', r_min)
 
-        use_circle = (kron / config['kron_factor']) < r_min
+        use_circle = kron * np.sqrt(cat['a'] * cat['b']) < r_min
         kflux[use_circle] = cflux[use_circle]
         kfluxerr[use_circle] = cfluxerr[use_circle]
         kflag[use_circle] = cflag[use_circle]
