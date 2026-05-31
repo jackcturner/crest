@@ -271,7 +271,7 @@ class SEP():
         if type == 'kron':
 
             # First get the kron radius.
-            if isinstance(det, type(None)):
+            if det is None:
                 ap_radius, krflag = sep.kron_radius(
                     sci, cat['x'], cat['y'], cat['a'], cat['b'], cat['theta'], config['int_radius'], 
                     mask=mask, maskthresh=0, seg_id=seg_id, segmap=seg)
@@ -786,7 +786,7 @@ class SEP():
         # below required radius with cirecular.
         self._vprint('Measuring Kron photometry.')
         kflux, kfluxerr, kflag, kron = self._measure_photometry(sci_m, err_m, segmap, cat, config, 
-                                                                'kron', sci_d)
+                                                                'kron', det=sci_d)
         r_min = config['min_radius']
         cflux, cfluxerr, cflag, _ = self._measure_photometry(sci_m, err_m, segmap, cat, config, 
                                                             'circular', r_min)
