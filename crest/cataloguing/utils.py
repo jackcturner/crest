@@ -15,6 +15,8 @@ import astropy.units as u
 from astropy.nddata import Cutout2D
 from astropy.wcs import WCS
 
+from crest.utils import measure_curve_of_growth
+
 def merge_catalogues(catalogue_paths, labels, merged_path='merged_catalogue.hdf5'):
     """
     Combine multiple hdf5 catalogues produced by CREST into a single 
@@ -587,5 +589,98 @@ def flag_mask(catalogue_path, mask_path, bands, label='MASK', X_name='X_IMAGE',
             if label in f[f'photometry/{band}'].keys():
                 del f[f'photometry/{band}/{label}']
             f[f'photometry/{band}/{label}'] = flag
+
+    return
+
+def aperture_correct(catalogue, bands, psfs, replace=False, suffix='_APCORR', flux_key='FLUX_AUTO', 
+                     err_key='FLUXERR_AUTO', a_key='A_IMAGE', b_key='B_IMAGE', kron_key='KRON_RADIUS',
+                     kron_factor=1):
+    """
+    Apply PSF encircled-energy corrections to Kron fluxes in a CREST 
+    catalogue.
+
+    Arguments
+    ---------
+    catalogue (str)
+        Path to the merged CREST hdf5 catalogue.
+    bands (List[str])
+        List of photometry sub-groups to correct.
+    psfs (List[str])
+        List of paths to PSF arrays with with to correct each band.
+    replace (bool)
+        If True, overwrite the current flux and error datasets.
+    suffix (str)
+        Suffix for corrected datasets if replace is False.
+    flux_key (str)
+        Name of the flux dataset to correct.
+    err_key (str)
+        Name of the flux uncertainty dataset to scale.
+    a_key (str)
+        Name of the semi-major axis dataset.
+    b_key (str)
+        Name of the semi-minor axis dataset.
+    kron_key (str)
+        Name of the Kron radius dataset.
+    kron_factor (float)
+        If Kron radius is unscaled, the factor by which to scale it.
+    """
+
+    if len(bands) != len(psfs):
+        raise ValueError('bands and psfs must have the same length.')
+    
+    with h5py.File(catalogue, 'r+') as f:
+
+        if 'photometry' not in f:
+            raise KeyError('Catalogue should contain a "photometry" group.')
+
+        for band, psf in zip(bands, psfs):
+
+            group_path = f'photometry/{band}'
+            keys = f[group_path].keys()
+
+            # Extract required quantities from the catalogue.
+            flux = f[f'{group_path}/{flux_key}'][:]
+            err = f[f'{group_path}/{err_key}'][:]
+            a_img = f[f'{group_path}/{a_key}'][:]
+            b_img = f[f'{group_path}/{b_key}'][:]
+            kron_radius = f[f'{group_path}/{kron_key}'][:]
+
+            # Equivalent circular radius preserving the Kron area.
+            r_eq = np.sqrt(a_img * b_img) * (kron_radius * kron_factor)
+
+            # Load and normalise the PSF.
+            psf_data = fits.getdata(psf)
+            ny, nx = psf_data.shape
+            psf_data /= np.sum(psf_data)
+
+            # Measure and normalise and interpolate the curve of growth.
+            r, cog = measure_curve_of_growth(
+                psf_data, radii=np.arange(0.5, np.minimum(nx, ny)/2, 0.5))
+            cog /= cog[-1]
+
+            ee = np.interp(r_eq, r, cog, left=cog[0], right=1.0)
+            psf_valid = np.isfinite(r_eq) & (r_eq > 0) & np.isfinite(flux)
+
+            # Scale the fluxes and errors by the encircled energy.
+            scale = np.ones_like(flux, dtype=float)
+            scale[psf_valid] = 1.0 / ee[psf_valid]
+            flux_corr = flux * scale
+            err_corr = err * scale
+
+            # Save to the catalogue as requested.
+            if replace:
+                del f[f'{group_path}/{flux_key}']
+                del f[f'{group_path}/{err_key}']
+                f[f'{group_path}/{flux_key}'] = flux_corr
+                f[f'{group_path}/{err_key}'] = err_corr
+            else:
+                flux_out = f'{flux_key}{suffix}'
+                err_out = f'{err_key}{suffix}'
+                if flux_out in keys:
+                    del f[f'{group_path}/{flux_out}']
+                if err_out in keys:
+                    del f[f'{group_path}/{err_out}']
+                f[f'{group_path}/{flux_out}'] = flux_corr
+                f[f'{group_path}/{err_out}'] = err_corr
 
     return
