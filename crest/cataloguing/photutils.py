@@ -710,7 +710,7 @@ class Photutils():
         if isinstance(cat_name, type(None)):
             cat_name = f'{outdir}/{os.path.basename(science_path[1]).removesuffix(".fits")}_photutils.hdf5'
         else:
-            cat_name = f'{outdir}/{cat_name.split(".")[0]}.hdf5'
+            cat_name = f'{outdir}/{os.path.basename(cat_name)}.hdf5'
         self._cat_name = cat_name
 
         # Load detection image.
