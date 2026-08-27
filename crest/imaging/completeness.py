@@ -40,11 +40,6 @@ def find_matches(small_cat, large_cat):
     # Query the KD-tree with the positions from the smaller catalogue.
     distances, indices = large_tree.query(small_cat)
 
-    # Sort indices and reorder distances accordingly.
-    sorted_indices = np.argsort(indices)
-    indices = indices[sorted_indices]
-    distances = distances[sorted_indices]
-    
     return indices, distances
 
 def _completeness_worker(task):
@@ -150,17 +145,18 @@ def _completeness_worker(task):
             s[duplicate_mask] = False
 
             # Apply the distance criterion to indices and sort them.
-            filtered_indices = indices[s]
-            sorted_order = np.argsort(filtered_indices)
-            sorted_indices = filtered_indices[sorted_order]
+            matched_source_indices = np.where(s)[0]
+            matched_detection_indices = indices[s]
+            sorted_order = np.argsort(matched_detection_indices)
+            sorted_indices = matched_detection_indices[sorted_order]
+            matched_source_indices = matched_source_indices[sorted_order]
 
             # Apply flux and S/N criteria.
             flux = f['photometry/FLUX_AUTO'][sorted_indices]
             err = f['photometry/FLUXERR_AUTO'][sorted_indices]
             sn = flux / err
 
-            true_flux = source_table['FLUX'][s]
-            true_flux = true_flux[sorted_order]
+            true_flux = np.asarray(source_table['FLUX'])[matched_source_indices]
 
             s_ = ((flux / true_flux < task['flux_limits'][1]) & 
                   (flux / true_flux > task['flux_limits'][0]) &
@@ -228,7 +224,7 @@ def measure_completeness(science_path, weight_path, psf_path, bins, config_path,
     error (List[numpy.ndarray])
         The 1-sigma upper and lower confidence limits.
     """
-    
+
     temp_name = os.path.basename(science_path).removesuffix('fits')
     print(f'Measuring completeness in {temp_name}...')
 
