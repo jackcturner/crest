@@ -1,4 +1,5 @@
 import os
+import warnings
 import h5py
 import urllib.request
 from urllib.error import URLError
@@ -298,242 +299,6 @@ def correct_extinction(catalogue, flux_err_pairs, to_jy, replace=False, suffix='
                 
     return
 
-def match_gaia(catalogue, bands, gaia_catalogue, tolerance, ra_name='ALPHA_SKY', 
-                       dec_name='DELTA_SKY', angle_unit=u.degree):
-    """
-    Match and flag sources in a CREST catalogue to those in a GAIA
-    star catalogue
-    
-    Arguments
-    ---------
-    catalogue (str)
-        Filename of CREST hdf5 catalogue.
-    bands (List[str])
-        List containing the catalogue groups to match.
-    gaia_catalogue (str)
-        Filename of the fits GAIA star catalogue.
-    tolerance (float)
-        The matching tolerance in arcseconds.
-    ra_name (str):
-        Name of the RA dataset in the catalogue.
-    dec_name (str)
-        Name of the DEC dataset in the catalogue.
-    angle_unit (astropy.units.Unit)
-        The unit of angular tolerance and RA and DEC.
-
-    """
-
-    tolerance = tolerance*u.arcsec
-
-    # Load the GAIA catalogue and get source positions.
-    gaia_cat = Table.read(gaia_catalogue)
-    gaia_coord = SkyCoord(ra=np.array(gaia_cat['ra']) * angle_unit,
-                          dec=np.array(gaia_cat['dec']) * angle_unit)
-
-    # For each band requested.
-    with h5py.File(catalogue, 'r+') as cat:
-
-        for band in bands:
-
-            # Store the flags here..
-            star_flag = np.zeros(len(cat[f'photometry/{band}/{ra_name}'][:]))
-            quasar_flag = np.zeros(len(cat[f'photometry/{band}/{ra_name}'][:]))
-            p_flag = np.zeros(len(cat[f'photometry/{band}/{ra_name}'][:]))
-
-            # Match each source to the GAIA catalogue.
-            cat_coord = SkyCoord(ra=cat[f'photometry/{band}/{ra_name}'][:] * angle_unit,
-                                 dec=cat[f'photometry/{band}/{dec_name}'][:] * angle_unit)
-
-            # Find the source closest to each gaia source.
-            idx, d2d, d3d = gaia_coord.match_to_catalog_sky(cat_coord)
-            d2d = d2d.to('arcsec')
-            s = (d2d < tolerance)
-
-            # Add the varous flags.
-            for index, class_s in zip(idx[s], gaia_cat['classprob_dsc_combmod_star'][s]):
-                star_flag[index] = class_s
-            for index, class_q in zip(idx[s], gaia_cat['classprob_dsc_combmod_quasar'][s]):
-                quasar_flag[index] = class_q
-            for index, p_over_e in zip(idx[s], gaia_cat['parallax_over_error'][s]):
-                p_flag[index] = p_over_e
-
-            # Add the flag array.
-            if 'GAIA_STAR' in cat[f'photometry/{band}'].keys():
-                del cat[f'photometry/{band}/GAIA_STAR']
-            cat[f'photometry/{band}/GAIA_STAR'] = star_flag
-
-            if 'GAIA_QUASAR' in cat[f'photometry/{band}'].keys():
-                del cat[f'photometry/{band}/GAIA_QUASAR']
-            cat[f'photometry/{band}/GAIA_QUASAR'] = quasar_flag
-
-            if 'GAIA_POE' in cat[f'photometry/{band}'].keys():
-                del cat[f'photometry/{band}/GAIA_POE']
-            cat[f'photometry/{band}/GAIA_POE'] = p_flag
-    
-    return
-
-def gaia_cutouts(catalogue, img, wcs, side_length=200):
-    """
-    Plot cutouts of an image at the location of GAIA sources.
-    
-    Arguments
-    ---------
-    catalogue (astropy.table.Table)
-        Astropy table containing the GAIA sources.
-    img (np.ndarray)
-        2D array from which to extract the cutout.
-    wcs (astropy.wcs.WCS)
-        Astropy WCS object for image array.
-    side_length (int)
-        The side length of the cutouts in pixels.
-    """
-
-    # For each GAIA source.
-    for row in catalogue:
-
-        # Extract useful information.
-        ra = row['ra'] 
-        dec = row['dec']
-        class_s = row['classprob_dsc_combmod_star']
-        class_q = row['classprob_dsc_combmod_quasar']
-        class_g = row['classprob_dsc_combmod_galaxy']
-        id = row['SOURCE_ID']
-        parallax = row['parallax']
-
-        # Extract the cutout from the original image.
-        coord = SkyCoord(ra=ra, dec=dec, unit='deg', frame='icrs')
-        try:
-            cutout = Cutout2D(img, coord, (side_length, side_length), wcs=wcs)
-            
-        # Catalogue can sometimes contain sources outside the bounds of 
-        # the image. Account for this.
-        except:
-            print(str(id)+' is beyond the image boundry.')
-            continue
-
-        # Plot the cutout
-        print(id)
-        fig, ax = plt.subplots(figsize=(3.78, 3.78))
-        ax.imshow(cutout.data, origin='lower', cmap='gray', norm = SymLogNorm(linthresh=0.03))
-        ax.set_title('ID: ' + str(id) + 
-                     ' RA: {:.2f}, DEC: {:.2f}, S: {:.2f}, Q: {:.2f}, G: {:.2f}, P: {:.2f}'.format(
-                         ra, dec, class_s, class_q, class_g, parallax))       
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        plt.colorbar(label='Intensity')
-        plt.show()
-
-    return
-
-def inspect_gaia(imgs, gaia_table="gaiadr3.gaia_source"):
-    """
-    Query the GAIA database and create cutouts from an image to identify
-    missclassifications.
-    
-    Arguments
-    ---------
-    imgs (List[str])
-        List of paths to images in which to search for stars.
-    gaia_table (str)
-        The GAIA data table to query.
-    
-    Returns
-    -------
-    tables (List[astropy.table.Table])
-        List of Astropy tables containing the GAIA sources in each image.
-    """
-
-    # Select the appropriate GAIA table and return all rows.
-    from astroquery.gaia import Gaia
-    Gaia.MAIN_GAIA_TABLE = gaia_table
-    Gaia.ROW_LIMIT = -1
-
-    # For each image identified in the directory.
-    tables = []
-    for img_path in imgs:
-
-        img, hdr = fits.getdata(img_path, header = True)
-        ny, nx = img.shape
-
-        wcs = WCS(hdr)
-
-        # Convert pixel coordinates to RA and DEC.
-        pixel_corners = np.array([[0, 0], [0, ny], [nx, ny], [nx, 0]])
-        ra_dec_corners = wcs.pixel_to_world_values(pixel_corners[:, 0], pixel_corners[:, 1])
-
-        # Find the minimum and maximum values of RA and DEC.
-        ra_values = ra_dec_corners[0]
-        dec_values = ra_dec_corners[1]
-
-        min_ra = np.min(ra_values)
-        max_ra = np.max(ra_values)
-        min_dec = np.min(dec_values)
-        max_dec = np.max(dec_values)
-
-        # Calculate the width and height of the query region.
-        width_deg = (max_ra - min_ra)
-        height_deg = (max_dec - min_dec)
-
-        # and create a SkyCoord object for its center.
-        center_ra_deg = (min_ra + max_ra) / 2
-        center_dec_deg = (min_dec + max_dec) / 2
-        center_coord = SkyCoord(ra=center_ra_deg, dec=center_dec_deg, unit=u.deg, frame='icrs')
-
-        # Query GAIA database.
-        columns = ['source_id', 'ra', 'dec', 'phot_g_mean_mag', 'classprob_dsc_combmod_star',
-                   'classprob_dsc_combmod_quasar', 'classprob_dsc_combmod_galaxy', 'parallax',
-                   'parallax_error', 'parallax_over_error']        
-        result_table = Gaia.query_object_async(center_coord, width=width_deg * u.deg,
-                                               height=height_deg * u.deg, columns=columns)
-        
-        # Store the table for later.
-        tables.append(result_table)
-
-        # Plot the cutouts.
-        gaia_cutouts(result_table, img, wcs)
-
-    return tables
-
-def gaia_catalogue(tables, spurious=None, outname="gaia_catalogue.fits", append=True):
-    """
-    Merge GAIA catalogues and remove spurious sources.
-    
-    Arguments
-    ---------
-    tables (List[astropy.table.Table])
-        List of Astropy tables containing the GAIA sources.
-    spurious (List[int])
-        List of spurious source IDs.
-    append (bool)
-        If outname already exists, should the new catalogue be appended.
-        If False, overwrite the existing file.
-    outname (str)
-        Name of the merged GAIA catalogue.
-    """
-
-    if spurious is None:
-        spurious = []
-
-    # Stack the GAIA catalogues.
-    gaia_data = vstack(tables)
-
-    # Convert the spurious IDs to the correct dtype.
-    spurious = np.array(spurious, dtype=gaia_data['SOURCE_ID'].dtype)
-
-    # Remove the spurious sources.
-    mask = np.isin(gaia_data['SOURCE_ID'], spurious)
-    gaia_data_ = gaia_data[~mask]
-
-    # If file already exists append the new one if requested.
-    if (os.path.exists(outname)) & (append == True):
-        existing_table = Table.read(outname)
-        gaia_data_ = vstack([existing_table, gaia_data_])
-    
-    # Write out the catalogue.
-    gaia_data_.write(outname, overwrite=True)
-
-    return
-
 def flag_mask(catalogue_path, mask_path, bands, label='MASK', X_name='X_IMAGE', 
               Y_name='Y_IMAGE', indexing=1):
     """
@@ -682,5 +447,269 @@ def aperture_correct(catalogue, bands, psfs, replace=False, suffix='_APCORR', fl
                     del f[f'{group_path}/{err_out}']
                 f[f'{group_path}/{flux_out}'] = flux_corr
                 f[f'{group_path}/{err_out}'] = err_corr
+
+    return
+
+
+def match_gaia(catalogue, bands, gaia_catalogue, tolerance, ra_name='ALPHA_SKY', 
+                       dec_name='DELTA_SKY', angle_unit=u.degree):
+    """
+    Match and flag sources in a CREST catalogue to those in a GAIA
+    star catalogue
+    
+    Arguments
+    ---------
+    catalogue (str)
+        Filename of CREST hdf5 catalogue.
+    bands (List[str])
+        List containing the catalogue groups to match.
+    gaia_catalogue (str)
+        Filename of the fits GAIA star catalogue.
+    tolerance (float)
+        The matching tolerance in arcseconds.
+    ra_name (str):
+        Name of the RA dataset in the catalogue.
+    dec_name (str)
+        Name of the DEC dataset in the catalogue.
+    angle_unit (astropy.units.Unit)
+        The unit of angular tolerance and RA and DEC.
+    """
+
+    warnings.warn(
+        "match_gaia is deprecated and will be removed in a future version. " \
+        "gaia_query_to_regions is now recommended for GAIA informed masking.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    tolerance = tolerance*u.arcsec
+
+    # Load the GAIA catalogue and get source positions.
+    gaia_cat = Table.read(gaia_catalogue)
+    gaia_coord = SkyCoord(ra=np.array(gaia_cat['ra']) * angle_unit,
+                          dec=np.array(gaia_cat['dec']) * angle_unit)
+
+    # For each band requested.
+    with h5py.File(catalogue, 'r+') as cat:
+
+        for band in bands:
+
+            # Store the flags here..
+            star_flag = np.zeros(len(cat[f'photometry/{band}/{ra_name}'][:]))
+            quasar_flag = np.zeros(len(cat[f'photometry/{band}/{ra_name}'][:]))
+            p_flag = np.zeros(len(cat[f'photometry/{band}/{ra_name}'][:]))
+
+            # Match each source to the GAIA catalogue.
+            cat_coord = SkyCoord(ra=cat[f'photometry/{band}/{ra_name}'][:] * angle_unit,
+                                 dec=cat[f'photometry/{band}/{dec_name}'][:] * angle_unit)
+
+            # Find the source closest to each gaia source.
+            idx, d2d, d3d = gaia_coord.match_to_catalog_sky(cat_coord)
+            d2d = d2d.to('arcsec')
+            s = (d2d < tolerance)
+
+            # Add the varous flags.
+            for index, class_s in zip(idx[s], gaia_cat['classprob_dsc_combmod_star'][s]):
+                star_flag[index] = class_s
+            for index, class_q in zip(idx[s], gaia_cat['classprob_dsc_combmod_quasar'][s]):
+                quasar_flag[index] = class_q
+            for index, p_over_e in zip(idx[s], gaia_cat['parallax_over_error'][s]):
+                p_flag[index] = p_over_e
+
+            # Add the flag array.
+            if 'GAIA_STAR' in cat[f'photometry/{band}'].keys():
+                del cat[f'photometry/{band}/GAIA_STAR']
+            cat[f'photometry/{band}/GAIA_STAR'] = star_flag
+
+            if 'GAIA_QUASAR' in cat[f'photometry/{band}'].keys():
+                del cat[f'photometry/{band}/GAIA_QUASAR']
+            cat[f'photometry/{band}/GAIA_QUASAR'] = quasar_flag
+
+            if 'GAIA_POE' in cat[f'photometry/{band}'].keys():
+                del cat[f'photometry/{band}/GAIA_POE']
+            cat[f'photometry/{band}/GAIA_POE'] = p_flag
+    
+    return
+
+def gaia_cutouts(catalogue, img, wcs, side_length=200):
+    """
+    Plot cutouts of an image at the location of GAIA sources.
+    
+    Arguments
+    ---------
+    catalogue (astropy.table.Table)
+        Astropy table containing the GAIA sources.
+    img (np.ndarray)
+        2D array from which to extract the cutout.
+    wcs (astropy.wcs.WCS)
+        Astropy WCS object for image array.
+    side_length (int)
+        The side length of the cutouts in pixels.
+    """
+
+    warnings.warn(
+        "gaia_cutouts is deprecated and will be removed in a future version. " \
+        "gaia_query_to_regions is now recommended for GAIA informed masking.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    # For each GAIA source.
+    for row in catalogue:
+
+        # Extract useful information.
+        ra = row['ra'] 
+        dec = row['dec']
+        class_s = row['classprob_dsc_combmod_star']
+        class_q = row['classprob_dsc_combmod_quasar']
+        class_g = row['classprob_dsc_combmod_galaxy']
+        id = row['SOURCE_ID']
+        parallax = row['parallax']
+
+        # Extract the cutout from the original image.
+        coord = SkyCoord(ra=ra, dec=dec, unit='deg', frame='icrs')
+        try:
+            cutout = Cutout2D(img, coord, (side_length, side_length), wcs=wcs)
+            
+        # Catalogue can sometimes contain sources outside the bounds of 
+        # the image. Account for this.
+        except:
+            print(str(id)+' is beyond the image boundry.')
+            continue
+
+        # Plot the cutout
+        print(id)
+        fig, ax = plt.subplots(figsize=(3.78, 3.78))
+        ax.imshow(cutout.data, origin='lower', cmap='gray', norm = SymLogNorm(linthresh=0.03))
+        ax.set_title('ID: ' + str(id) + 
+                     ' RA: {:.2f}, DEC: {:.2f}, S: {:.2f}, Q: {:.2f}, G: {:.2f}, P: {:.2f}'.format(
+                         ra, dec, class_s, class_q, class_g, parallax))       
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        plt.colorbar(label='Intensity')
+        plt.show()
+
+    return
+
+def inspect_gaia(imgs, gaia_table="gaiadr3.gaia_source"):
+    """
+    Query the GAIA database and create cutouts from an image to identify
+    missclassifications.
+    
+    Arguments
+    ---------
+    imgs (List[str])
+        List of paths to images in which to search for stars.
+    gaia_table (str)
+        The GAIA data table to query.
+    
+    Returns
+    -------
+    tables (List[astropy.table.Table])
+        List of Astropy tables containing the GAIA sources in each image.
+    """
+
+    warnings.warn(
+        "inspect_gaia is deprecated and will be removed in a future version. " \
+        "gaia_query_to_regions is now recommended for GAIA informed masking.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    # Select the appropriate GAIA table and return all rows.
+    from astroquery.gaia import Gaia
+    Gaia.MAIN_GAIA_TABLE = gaia_table
+    Gaia.ROW_LIMIT = -1
+
+    # For each image identified in the directory.
+    tables = []
+    for img_path in imgs:
+
+        img, hdr = fits.getdata(img_path, header = True)
+        ny, nx = img.shape
+
+        wcs = WCS(hdr)
+
+        # Convert pixel coordinates to RA and DEC.
+        pixel_corners = np.array([[0, 0], [0, ny], [nx, ny], [nx, 0]])
+        ra_dec_corners = wcs.pixel_to_world_values(pixel_corners[:, 0], pixel_corners[:, 1])
+
+        # Find the minimum and maximum values of RA and DEC.
+        ra_values = ra_dec_corners[0]
+        dec_values = ra_dec_corners[1]
+
+        min_ra = np.min(ra_values)
+        max_ra = np.max(ra_values)
+        min_dec = np.min(dec_values)
+        max_dec = np.max(dec_values)
+
+        # Calculate the width and height of the query region.
+        width_deg = (max_ra - min_ra)
+        height_deg = (max_dec - min_dec)
+
+        # and create a SkyCoord object for its center.
+        center_ra_deg = (min_ra + max_ra) / 2
+        center_dec_deg = (min_dec + max_dec) / 2
+        center_coord = SkyCoord(ra=center_ra_deg, dec=center_dec_deg, unit=u.deg, frame='icrs')
+
+        # Query GAIA database.
+        columns = ['source_id', 'ra', 'dec', 'phot_g_mean_mag', 'classprob_dsc_combmod_star',
+                   'classprob_dsc_combmod_quasar', 'classprob_dsc_combmod_galaxy', 'parallax',
+                   'parallax_error', 'parallax_over_error']        
+        result_table = Gaia.query_object_async(center_coord, width=width_deg * u.deg,
+                                               height=height_deg * u.deg, columns=columns)
+        
+        # Store the table for later.
+        tables.append(result_table)
+
+        # Plot the cutouts.
+        gaia_cutouts(result_table, img, wcs)
+
+    return tables
+
+def gaia_catalogue(tables, spurious=None, outname="gaia_catalogue.fits", append=True):
+    """
+    Merge GAIA catalogues and remove spurious sources.
+    
+    Arguments
+    ---------
+    tables (List[astropy.table.Table])
+        List of Astropy tables containing the GAIA sources.
+    spurious (List[int])
+        List of spurious source IDs.
+    append (bool)
+        If outname already exists, should the new catalogue be appended.
+        If False, overwrite the existing file.
+    outname (str)
+        Name of the merged GAIA catalogue.
+    """
+
+    warnings.warn(
+        "gaia_catalogue is deprecated and will be removed in a future version. " \
+        "gaia_query_to_regions is now recommended for GAIA informed masking.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    if spurious is None:
+        spurious = []
+
+    # Stack the GAIA catalogues.
+    gaia_data = vstack(tables)
+
+    # Convert the spurious IDs to the correct dtype.
+    spurious = np.array(spurious, dtype=gaia_data['SOURCE_ID'].dtype)
+
+    # Remove the spurious sources.
+    mask = np.isin(gaia_data['SOURCE_ID'], spurious)
+    gaia_data_ = gaia_data[~mask]
+
+    # If file already exists append the new one if requested.
+    if (os.path.exists(outname)) & (append == True):
+        existing_table = Table.read(outname)
+        gaia_data_ = vstack([existing_table, gaia_data_])
+    
+    # Write out the catalogue.
+    gaia_data_.write(outname, overwrite=True)
 
     return
