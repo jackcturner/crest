@@ -1,3 +1,4 @@
+import os
 from astropy.io import fits
 from astropy.wcs import WCS
 import numpy as np
@@ -258,6 +259,119 @@ def create_stack(science_paths, weight_paths, weight_is_rms=False, hdr_index=0,)
     rms_hdu = fits.PrimaryHDU(stack_wht.astype(np.float32), header=wht_hdr)
 
     return sci_hdu, rms_hdu
+
+def max_sn_image(science_paths, rms_paths):
+    """
+    Create an image where each pixel value is the maximum signal-to-noise
+    ratio across a set of filter images.
+    
+    Arguments
+    ---------
+    science_paths (List[str])
+        Filenames of science images to stack.
+    rms_paths (List[str])
+        Filenames of the corresponding RMS images.
+        
+    Returns
+    -------
+    det_hdu (astropy.io.fits.PrimaryHDU)
+        The detection image as an astropy HDU object.
+    """
+
+    # Construct an empty new image.
+    with fits.open(science_paths[0]) as hdul:
+        shape = hdul[0].data.shape
+        wcs = WCS(hdul[0].header)
+
+    max_sn = np.full(shape, 0, dtype=np.float32)
+
+    # Comput the maximum S/N in each pixel.
+    for sfile, rfile in zip(science_paths, rms_paths):
+        sci = fits.getdata(sfile)
+        rms = 1 / np.sqrt(fits.getdata(rfile))
+        valid = np.isfinite(sci) & np.isfinite(rms) & (rms > 0)
+        rms[~valid] = 0
+
+        sn = np.zeros_like(sci, dtype=np.float32)
+        np.divide(sci, rms, out=sn, where=valid)
+
+        max_sn = np.maximum(max_sn, sn)
+
+    # Replace invalid pixels.
+    max_sn[~np.isfinite(max_sn)] = 0.0
+
+    # Record the names of the images used.
+    header = wcs.to_header()
+    header["HISTORY"] = "Science images used:"
+    for path in science_paths:
+        header["HISTORY"] = f"{os.path.basename(path)}"
+
+    header["HISTORY"] = "RMS images used:"
+    for path in rms_paths:
+        header["HISTORY"] = f"{os.path.basename(path)}"
+
+    det_hdu = fits.PrimaryHDU(max_sn.astype(np.float32), header=header)
+
+    return det_hdu
+
+def chi2_image(science_paths, weight_paths):
+    """
+    Construct a chi-squared image from a set of science and 
+    weight images.
+    
+    Arguments
+    ---------
+    science_paths (List[str])
+        Filenames of science images to stack.
+    weight_paths (List[str])
+        Filenames of the corresponding weight images.
+        
+    Returns
+    -------
+    det_hdu (astropy.io.fits.PrimaryHDU)
+        The detection image as an astropy HDU object.
+    wht_hdu (astropy.io.fits.PrimaryHDU)
+        The weight image as an astropy HDU object.
+    """
+
+    # Construct empty new images.
+    with fits.open(science_paths[0]) as hdul:
+        shape = hdul[0].data.shape
+        wcs = WCS(hdul[0].header)
+
+    sum_w_s2 = np.zeros(shape, dtype=np.float32)
+    n_pix = np.zeros(shape, dtype=np.int16)
+
+    # Sum the weighted squares of the science images.
+    for sfile, wfile in zip(science_paths, weight_paths):
+        sci = fits.getdata(sfile)
+        wht = fits.getdata(wfile)
+
+        valid = wht > 0
+
+        sum_w_s2[valid] += wht[valid] * sci[valid]**2
+        n_pix[valid] += 1
+
+    # Compute the chi-squared image.
+    chi2 = np.zeros_like(sum_w_s2)
+    valid = n_pix > 0
+
+    chi2[valid] = np.sqrt(sum_w_s2[valid]) / np.sqrt(n_pix[valid])
+    det_wht = (n_pix > 0)
+
+    # Record the names of the images used.
+    header = wcs.to_header()
+    header["HISTORY"] = "Science images used:"
+    for path in science_paths:
+        header["HISTORY"] = f"{os.path.basename(path)}"
+    header["HISTORY"] = "Weight images used:"
+    for path in weight_paths:
+        header["HISTORY"] = f"{os.path.basename(path)}"
+
+    det_hdu = fits.PrimaryHDU(chi2.astype(np.float32), header=header)
+    wht_hdu = fits.PrimaryHDU(det_wht.astype(np.float32), header=header)
+
+    return det_hdu, wht_hdu
 
 def Gaussian_2D(coord, xo, yo, sigma_x, sigma_y, amplitude, offset):
     """
