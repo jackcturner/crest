@@ -2,6 +2,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 import numpy as np
 import scipy.ndimage as nd
+import scipy.optimize as opt
 
 def _pc2cd(hdr, key=' '):
     """
@@ -257,3 +258,76 @@ def create_stack(science_paths, weight_paths, weight_is_rms=False, hdr_index=0,)
     rms_hdu = fits.PrimaryHDU(stack_wht.astype(np.float32), header=wht_hdr)
 
     return sci_hdu, rms_hdu
+
+def Gaussian_2D(coord, xo, yo, sigma_x, sigma_y, amplitude, offset):
+    """
+    2D Gaussian fitting function.
+    
+    Arguments
+    ---------
+    coord (List[float])
+        The x,y coordinate at which to evaluate the Gaussian.
+    xo (float)
+        The x-coordinate of the centre.
+    yo (float)
+        The y-coordinate of the centre.
+    sigma_x (float)
+        Standard deviation in the x direction in pixels.
+    sigma_y (float)
+        Standard deviation in the y direction in pixels.
+    amplitude (float)
+        Amplitude of the gaussian.
+    offset (float)
+        Offset to apply to the Gaussian values.
+
+    Returns
+    -------
+    flat_gaussian (numpy.ndarray)
+        1D flattened Gaussian distribution.
+    """
+
+    gaussian = offset + amplitude*np.exp( - (((coord[0]-float(xo))**2)/(2*sigma_x**2)
+                                             + ((coord[1]-float(yo))**2)/(2*sigma_y**2)))
+
+    flat_gaussian = gaussian.ravel()
+
+    return flat_gaussian
+
+def get_PSF_FWHM(psf_path):
+    """
+    Get FWHM of a PSF in x and y directions using Gaussian fitting.
+
+    Arguments
+    ---------
+    psf_path (str)
+        Filename of fits image PSF.
+
+    Returns
+    -------
+    fwhm (List[float])
+        Measured FWHM in x and y directions.
+    """
+
+    # Read the PSF array from the fits file.
+    img = fits.getdata(psf_path)
+
+    # Create an x and y grid.
+    x = np.linspace(0, img.shape[1], img.shape[1])
+    y = np.linspace(0, img.shape[0], img.shape[0])
+    x, y = np.meshgrid(x, y)
+    
+    # Some parameter inital guesses
+    initial_guess = [img.shape[1]/2,img.shape[0]/2,10,10,1,0]
+
+    # Fit with a Gaussian model.
+    popt, pcov = opt.curve_fit(Gaussian_2D, (x, y), 
+                               img.ravel(), p0 = initial_guess)
+    xcenter, ycenter, sigmaX, sigmaY, amp, offset = popt[0], popt[1], popt[2], popt[3], popt[4], popt[5]
+
+    # Convert the standard deviations to FWHM.
+    FWHM_x = np.abs(4*sigmaX*np.sqrt(-0.5*np.log(0.5)))
+    FWHM_y = np.abs(4*sigmaY*np.sqrt(-0.5*np.log(0.5)))
+
+    fwhm = [FWHM_x, FWHM_y]
+
+    return fwhm

@@ -450,6 +450,9 @@ def aperture_correct(catalogue, bands, psfs, replace=False, suffix='_APCORR', fl
 
     return
 
+"""
+Deprecated functions.
+"""
 
 def match_gaia(catalogue, bands, gaia_catalogue, tolerance, ra_name='ALPHA_SKY', 
                        dec_name='DELTA_SKY', angle_unit=u.degree):
