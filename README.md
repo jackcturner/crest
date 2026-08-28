@@ -72,4 +72,4 @@ Python wrapped SED fitting tools will be added soon.
 
 ## Citation & Acknowledgement
 
-If you use CREST in your research, please acknowledge the repository and ensure you cite any of the papers relevant to the tools you use.
+If you use CREST in your research, please cite the [FLAGS-I](https://ui.adsabs.harvard.edu/abs/2026arXiv260807668T/abstract) paper where it is introduced. Please also ensure that you cite any of the papers relevant to the tools you use.
